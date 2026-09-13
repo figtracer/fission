@@ -10,6 +10,7 @@ const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
 const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
 
 export const money = units;
+export const paymentTerms = { chainId: 4217, token: "0x20c000000000000000000000b9537d11c60e8b50", currency: "USDC.e" };
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -45,7 +46,7 @@ export async function quote(operation, body, provider = "modal-tempo") {
   let offer;
   try { offer = JSON.parse(result.stdout); } catch { throw new Error("Provider returned an unreadable quote."); }
   if (offer.payment_required !== true || offer.intent !== "charge" || offer.method !== "tempo" ||
-      offer.chain_id !== 4217 || offer.token?.toLowerCase() !== "0x20c000000000000000000000b9537d11c60e8b50")
+      offer.chain_id !== paymentTerms.chainId || offer.token?.toLowerCase() !== paymentTerms.token)
     throw new Error("Provider changed its payment terms. No payment submitted.");
   money(offer.amount);
   return offer;

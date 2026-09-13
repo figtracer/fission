@@ -26,6 +26,8 @@ const help = `fission — temporary workspaces paid with Tempo
     [--os linux --arch x86_64 --kind sandbox|vm --cpu N --memory GiB --disk GiB]
     [--repo https://github.com/OWNER/REPO --ref FULL_COMMIT]
     [--provider x402-compute --machine PLAN --region REGION --duration 24h]
+    Use --budget AMOUNT instead of both spending caps. Add --cheapest --region
+    REGION --duration 24h to select the cheapest compatible quoted VM.
   open NAME --plan ID --approve
   prepare NAME
   run NAME JOB --duration 10m -- COMMAND [ARG...]
@@ -101,7 +103,7 @@ async function main() {
   const tail = separator < 0 ? [] : raw.slice(separator + 1);
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" },
-    refresh: { type: "boolean" }, "discard-output": { type: "boolean" },
+    refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
@@ -111,7 +113,7 @@ async function main() {
   if (!command || values.help) { console.log(help); return; }
   const allowed = {
     capabilities: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
-    plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region"],
+    plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
     prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
     jobs: [], run: ["duration"], job: ["refresh"], wait: ["duration", "max-spend"],

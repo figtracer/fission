@@ -67,7 +67,7 @@ export async function reserve(state, operation, maximum, id) {
   return lock(async () => {
     const ledger = await readJSON(path);
     if (!ledger && !state.totalCap) return; // Existing creation-only workflows remain compatible.
-    if (!ledger) throw new Error("Initialize the aggregate budget before purchasing a persisted plan.");
+    if (!ledger) throw new BudgetRejected("Initialize the aggregate budget before purchasing a persisted plan.");
     if (operation === "create" && state.kind === "linux-vm") {
       const maximumVM = ceiling(ledger, state.profile);
       if (maximumVM !== null && units(state.totalCap) > units(maximumVM))
@@ -78,7 +78,7 @@ export async function reserve(state, operation, maximum, id) {
     if (!cap) throw new Error("This legacy workspace has no allocation in the active aggregate budget.");
     if (!ledger.allocations[state.name]) {
       const allocated = Object.values(ledger.allocations).reduce((sum, item) => sum + units(item), 0n);
-      if (allocated + units(cap) > units(ledger.limit)) throw new Error("Aggregate budget cannot fund this workspace allocation.");
+      if (allocated + units(cap) > units(ledger.limit)) throw new BudgetRejected("Aggregate budget cannot fund this workspace allocation.");
       ledger.allocations[state.name] = cap;
     }
     if (units(cap) !== units(ledger.allocations[state.name])) throw new Error("Workspace budget differs from its durable allocation.");

@@ -3,7 +3,7 @@ import { mkdir, readFile, access } from "node:fs/promises";
 import { randomUUID, createHash } from "node:crypto";
 import { root, directory, readJSON, writeJSON } from "./state.mjs";
 import { recipe, duration, start } from "./workspace.mjs";
-import { quote, money, runProcess } from "./provider.mjs";
+import { quote, money, runProcess, paymentTerms } from "./provider.mjs";
 import { catalog, machineCapabilities } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
@@ -77,6 +77,9 @@ export function requirementsFor(options) {
 // A short, fixed-size sample keeps discovery useful without quoting an entire
 // catalog. It is the cheapest compatible shortlist, never a market-wide average.
 const shortlistSize = 3;
+// Existing minimum allocation room for one launch and two shutdown calls.
+// This is an accounting floor, not an estimate of all lifecycle costs.
+const minimumHeadroom = 300n;
 const catalogPrice = (machine) => {
   if (typeof machine.our_daily !== "number" || !Number.isFinite(machine.our_daily) || machine.our_daily <= 0)
     throw new Error("Missing daily catalog price.");
@@ -130,6 +133,30 @@ export async function createPlan(name, options) {
   directory(name);
   const previous = await readJSON(join(directory(name), "state.json"));
   if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
+  options = { ...options };
+  if (options.budget !== undefined) {
+    if (options["max-spend"] !== undefined || options["total-spend"] !== undefined)
+      throw new Error("Use --budget alone, or separate --max-spend and --total-spend caps.");
+    if (money(options.budget) <= minimumHeadroom) throw new Error("Budget must leave room for creation and 0.0003 in lifecycle allocation.");
+    options["total-spend"] = options.budget;
+    options["max-spend"] = amount(money(options.budget) - minimumHeadroom);
+  }
+  let selection;
+  if (options.cheapest) {
+    if (options.budget === undefined) throw new Error("Use --cheapest with a whole-workspace --budget.");
+    if (options.machine || (options.provider && options.provider !== "x402-compute") || (options.kind && options.kind !== "vm"))
+      throw new Error("--cheapest selects a compute VM; do not combine it with --machine or an incompatible provider/kind.");
+    if (duration(options.duration) !== 86400) throw new Error("--cheapest requires an explicit --duration 24h.");
+    const cap = await vmCeiling(options.profile || "runtime");
+    if (cap !== null && money(options.budget) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
+    const discovery = await machineOffers(options);
+    if (!discovery.offers.length) return discovery;
+    const selected = discovery.offers[0];
+    options.provider = selected.provider;
+    options.machine = selected.machine;
+    selection = { strategy: "cheapest", scope: discovery.average.basis, sampleCount: discovery.offers.length,
+      average: discovery.average.amount, selectedQuote: selected.creationQuote, quotedAt: selected.quotedAt };
+  }
   const provider = options.provider || "modal-tempo";
   const { profile, requirements } = requirementsFor({ ...(provider === "x402-compute" ? { kind: "vm" } : {}), ...options });
   if (!["modal-tempo", "x402-compute"].includes(provider)) throw new Error("Unknown provider.");
@@ -150,8 +177,9 @@ export async function createPlan(name, options) {
   const definition = await recipe(options.recipe || "linux");
   if (definition.artifacts.some((path) => basename(path) === "output.log")) throw new Error("output.log is reserved for the bootstrap artifact; use another artifact basename.");
   const timeout = duration(options.duration);
-  const totalCap = options["total-spend"], creationCap = options["max-spend"];
-  if (money(creationCap) <= 0n || money(totalCap) < money(creationCap) + 300n)
+  const totalCap = options["total-spend"];
+  let creationCap = options["max-spend"];
+  if (money(creationCap) <= 0n || money(totalCap) < money(creationCap) + minimumHeadroom)
     throw new Error("Set --total-spend above the creation cap, leaving at least a launch and two shutdown calls (0.0003).");
   if (machine) {
     const cap = await vmCeiling(profile);
@@ -179,10 +207,16 @@ export async function createPlan(name, options) {
   }
   const offer = await quote("create", body, provider);
   if (money(offer.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
-  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, createdAt: new Date().toISOString() };
+  if (selection && money(offer.amount) > money(selection.selectedQuote)) throw new Error("Quote increased after selection. No purchase submitted; request a fresh plan.");
+  if (options.budget !== undefined) creationCap = offer.amount;
+  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
-  return value;
+  return { ...value, paymentSubmitted: false, open: ["fission", "open", name, "--plan", value.id, "--approve"],
+    funding: { ...paymentTerms, creationAmount: offer.amount, workspaceAllocation: totalCap,
+      remainingAllocation: amount(money(totalCap) - money(creationCap)), feesIncluded: false, balance: null, shortfall: null,
+      glue: { mode: "tempo-token", receiveToken: "usdc.e", preview: ["glue", "run", "--policy", "EXISTING_POLICY_FILE"],
+        note: "Preview an existing authorized Glue refill policy separately. A quote is not a balance, swap authorization, or permission to install a grant." } } };
 }
 
 export async function openPlan(name, id) {

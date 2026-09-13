@@ -2,6 +2,8 @@
 
 Temporary compute operated by your local coding agent.
 
+Start with `fission plan NAME --recipe foundry --cheapest --budget AMOUNT --region ams --duration 24h`. Choose an appropriate recipe/profile and an already agreed whole-workspace budget. Planning pays nothing and returns the quote plus exact `open` argv; opening rechecks price, hardware and authorization. `funding` supplies a structured handoff for an existing Glue Tempo-token refill policy, without inferring a wallet shortfall or authorizing swaps. Then use `run`, collect outputs and `close` when the task is done.
+
 Humans: `fission ui` for a minimal machine list, history, spending and SSH. Agents: `list --json`, `status --json`, `spending` and the job commands. `spending --refresh` verifies saved payment references through free read-only Tempo RPC calls; missing receipts stay unknown. UI navigation never authorizes a new purchase.
 
 - [Agent workflow](AGENTS.md): planning, authorization, jobs, readiness, recovery, and cleanup.
