@@ -34,4 +34,4 @@ To work on the tools themselves, select `--recipe foundry-source`, `reth-source`
 
 Close explicitly when finished; a successful job or closed terminal does not delete a machine. `close --output` saves declared artifacts and bootstrap output; use `download` for other files. Failed exports preserve the machine until expiry. Ambiguous deletion requires provider observation. Preserve `FISSION_HOME` and use `reconcile` after interrupted creation. Legacy Loaner state is reused when present, including its budget.
 
-References: [Glue](https://github.com/figtracer/glue), [Reth](https://reth.rs), [Foundry](https://getfoundry.sh), [Tempo](https://github.com/tempoxyz/tempo), [Modal](https://modal.com/docs/guide/sandboxes).
+References: [Glue](https://github.com/figtracer/glue), [Reth snapshots](https://snapshots.reth.rs), [Foundry](https://getfoundry.sh), [Tempo](https://github.com/tempoxyz/tempo), [Modal](https://modal.com/docs/guide/sandboxes).
