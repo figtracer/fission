@@ -4,25 +4,37 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { directory, readJSON, writeJSON } from "./state.mjs";
+import { units, reserve } from "./budget.mjs";
 
 const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
 const tempo = process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
 
-export function money(value) {
-  if (!/^(0|[1-9]\d*)(\.\d{1,6})?$/.test(value || ""))
-    throw new Error("Use a non-negative USDC.e amount with at most six decimal places.");
-  const [whole, fraction = ""] = value.split(".");
-  return BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"));
-}
+export const money = units;
 
-export function runProcess(command, args) {
+export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
+    let stdout = "", stderr = "", interruption;
+    if (options.signal?.aborted) return resolve({ code: null, stdout, stderr, interruption: "interrupted" });
+    const grouped = process.platform !== "win32";
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], detached: grouped });
+    const stop = (reason) => {
+      interruption = reason;
+      if (!child.pid) return;
+      try {
+        // Stop the local request process group before releasing its operation lock.
+        // A payment may already have escaped; the request remains unresolved.
+        if (grouped) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch (error) { if (error.code !== "ESRCH") reject(error); }
+    };
+    const abort = () => stop("interrupted");
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => stop("observation_deadline"), options.timeoutMs);
+    const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); };
     child.stdout.on("data", (data) => { stdout += data; });
     child.stderr.on("data", (data) => { stderr += data; });
-    child.on("error", reject);
-    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+    child.on("error", (error) => { cleanup(); reject(error); });
+    child.on("close", (code, signal) => { cleanup(); resolve({ code, signal, stdout, stderr, interruption }); });
   });
 }
 
@@ -38,21 +50,22 @@ export async function quote(operation, body) {
   return offer;
 }
 
-export async function request(state, operation, body, maximum, id = randomUUID()) {
+export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
   const responsePath = join(dir, `${id}.response.json`);
   const metaPath = join(dir, `${id}.meta.json`);
   if (await readJSON(intent)) throw new Error(`Request ${id} already exists. Reconcile it; do not pay again.`);
+  await reserve(state, operation, maximum, id);
   await writeJSON(intent, { id, operation, body, maximum, submittedAt: new Date().toISOString(), state: "submitting" });
   for (const path of [responsePath, metaPath]) {
     const file = await open(path, "wx", 0o600); await file.close();
   }
-  const result = await runProcess(tempo, ["request", "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, endpoint + operation]);
+  const result = await runProcess(tempo, ["request", "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, endpoint + operation], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
   let response;
   try { response = JSON.parse(responseText); } catch { /* Preserve the raw response for recovery. */ }
-  await writeJSON(intent, { id, operation, body, maximum, state: result.code === 0 ? "received" : "unknown", exitCode: result.code, finishedAt: new Date().toISOString() });
+  await writeJSON(intent, { id, operation, body, maximum, state: result.code === 0 ? "received" : "unknown", exitCode: result.code, interruption: result.interruption, finishedAt: new Date().toISOString() });
   if (result.code !== 0 || !response) {
     await writeJSON(join(dir, `${id}.error.json`), { code: result.code, stderr: result.stderr, stdout: result.stdout });
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}). Saved response: ${responsePath}. Do not repeat the payment.`);
@@ -68,10 +81,10 @@ export async function recoverCreate(state) {
   return response && /^sb-[A-Za-z0-9]+$/.test(response.sandbox_id || "") ? response.sandbox_id : null;
 }
 
-export async function execute(state, command, maximum) {
+export async function execute(state, command, maximum, id, options) {
   if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== "string" || arg.includes("\0")))
     throw new Error("Supply a command and its arguments after --.");
-  const result = await request(state, "exec", { sandbox_id: state.remoteId, command }, maximum);
+  const result = await request(state, "exec", { sandbox_id: state.remoteId, command }, maximum, id, options);
   if (!Number.isInteger(result.returncode) || typeof result.stdout !== "string" || typeof result.stderr !== "string")
     throw new Error("Unrecognized command result; inspect the saved response before retrying.");
   return result;

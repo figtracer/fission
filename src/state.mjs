@@ -49,10 +49,11 @@ export async function list() {
   return states;
 }
 
-export async function locked(name, action) {
-  const dir = directory(name);
+export const locked = (name, action) => fileLocked(join(directory(name), "operation.lock"), action);
+
+export async function fileLocked(path, action) {
+  const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, "operation.lock");
   let file;
   try { file = await open(path, "wx", 0o600); }
   catch (error) {

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked } from "./state.mjs";
 import { quote, request, recoverCreate, execute, money } from "./provider.mjs";
+import { hasTerminationReservation } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
 export const operationCap = "0.0001";
@@ -11,13 +12,14 @@ const recipeDirectory = fileURLToPath(new URL("../recipes/", import.meta.url));
 export const terminal = (state) => ["terminated", "expired"].includes(state.phase);
 
 export async function recipe(input = "linux") {
-  const file = ["linux", "reth"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
+  const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
   const value = JSON.parse(await readFile(file, "utf8"));
   if (typeof value.name !== "string" || !Array.isArray(value.prepare) || !Array.isArray(value.artifacts))
     throw new Error("Recipe requires name, prepare argv arrays, and artifact paths.");
-  if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts"].includes(key)))
+  if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts", "readiness"].includes(key)))
     throw new Error("Unknown recipe field. Recipes cannot change payment or runtime settings.");
-  for (const args of value.prepare)
+  if (value.readiness !== undefined && !Array.isArray(value.readiness)) throw new Error("Readiness must be argv arrays.");
+  for (const args of [...value.prepare, ...(value.readiness || [])])
     if (!Array.isArray(args) || !args.length || args.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Each preparation command must be an argv array.");
   const names = new Set();
@@ -67,6 +69,19 @@ export async function start(name, prepared) {
     state.deadlineEstimate = new Date(Date.parse(state.requestedAt) + state.durationSeconds * 1000).toISOString();
     state.phase = "preparing";
     await save(state);
+    if (state.asyncPreparation) {
+      const { launch } = await import("./jobs.mjs");
+      const commands = [...state.recipe.prepare];
+      if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
+      if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
+      // The job identity is persisted before launch. An ambiguous result is observed,
+      // never automatically replayed or mistaken for failed preparation.
+      state.bootstrapJob = "bootstrap";
+      state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.loaner/jobs/bootstrap/output.log"])] };
+      await save(state);
+      await launch(state, "bootstrap", commands, state.durationSeconds, state.recipe.readiness || []);
+      return state;
+    }
     try {
       for (const command of state.recipe.prepare) {
         const result = await execute(state, command, operationCap);
@@ -96,6 +111,10 @@ async function refreshState(state) {
   if (response.status === "terminated") {
     state.phase = "terminated";
     state.closedAt ??= state.observedAt;
+  } else if (terminal(state)) {
+    // A termination acknowledgement can precede the provider's actual exit.
+    state.phase = "termination_unknown";
+    delete state.closedAt;
   }
   await save(state);
   return state;
@@ -124,12 +143,10 @@ async function terminate(state) {
   await save(state);
   const response = await request(state, "terminate", { sandbox_id: state.remoteId }, operationCap);
   if (response.status !== "terminated") throw new Error("Provider did not confirm termination. Run status before retrying.");
-  state.phase = "terminated";
-  state.remoteStatus = "terminated";
-  state.observedAt = new Date().toISOString();
-  state.closedAt ??= state.observedAt;
+  state.remoteStatus = "termination_acknowledged";
   await save(state);
-  return state;
+  // The gateway can acknowledge before the process has actually exited.
+  return refreshState(state);
 }
 
 function remotePath(path) {
@@ -138,10 +155,12 @@ function remotePath(path) {
   return path;
 }
 
-export async function active(name) {
+export async function active(name, requireReady = true) {
   const state = await load(name);
   if (!state.remoteId || terminal(state) || ["termination_unknown", "closing"].includes(state.phase))
     throw new Error(`Workspace is ${state.phase}; inspect status before executing work.`);
+  if (requireReady && state.bootstrapJob && state.phase !== "ready")
+    throw new Error("Bootstrap is not ready. Inspect its job before submitting work.");
   // The local deadline is informational; only the provider knows actual expiry.
   return state;
 }
@@ -190,7 +209,7 @@ export async function download(state, remote, local) {
     await target.sync();
     return { local: destination, remote, bytes: offset, sha256: expected.sha256 };
   } catch (error) {
-    throw new Error(`${error.message} Partial output retained at ${destination}; machine remains open until its original deadline.`);
+    throw new Error(`${error.message} Partial output retained at ${destination}; inspect provider status. No termination was requested by this export.`);
   } finally { await target.close(); }
 }
 
@@ -199,7 +218,7 @@ export async function close(name, options) {
     const state = await load(name);
     if (terminal(state)) return state;
     if (!state.remoteId) throw new Error("Run reconcile before closing an unresolved creation.");
-    if (state.phase === "termination_unknown") {
+    if (state.phase === "termination_unknown" && await hasTerminationReservation(state)) {
       await refreshState(state);
       if (terminal(state)) return state;
     }

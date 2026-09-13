@@ -1,0 +1,26 @@
+{
+  "name": "tempo",
+  "description": "Tempo 1.14.0 isolated development chain with loopback RPC at 127.0.0.1:8645; no public network or production consensus.",
+  "prepare": [
+    [
+      "python3",
+      "-c",
+      "import hashlib,io,json,pathlib,platform,subprocess,tarfile,urllib.request\nroot=pathlib.Path('/workspace'); root.mkdir(exist_ok=True)\nassets={'x86_64': {'url': 'https://github.com/tempoxyz/tempo/releases/download/v1.14.0/tempo-v1.14.0-x86_64-unknown-linux-gnu.tar.gz', 'sha256': '93afdfe95395893acd294f9924ae89a3b1c90f8503fefb1b5cec43a3c7d86357'}, 'aarch64': {'url': 'https://github.com/tempoxyz/tempo/releases/download/v1.14.0/tempo-v1.14.0-aarch64-unknown-linux-gnu.tar.gz', 'sha256': 'd55092a9a0cf52e14df0dc00dfe09e575e71e2f0cf6e46d6107ddf1d5a8302e9'}}\nasset=assets[platform.machine()]\ndata=urllib.request.urlopen(asset['url'],timeout=120).read()\nassert hashlib.sha256(data).hexdigest()==asset['sha256'], 'Archive digest mismatch'\nwith tarfile.open(fileobj=io.BytesIO(data),mode='r:gz') as archive:\n    for name in ['tempo']:\n        matches=[m for m in archive.getmembers() if pathlib.PurePosixPath(m.name).name==asset['url'].rsplit('/',1)[1].removesuffix('.tar.gz') and m.isfile()]\n        assert len(matches)==1, 'Expected one executable: '+name\n        binary=root/name; binary.write_bytes(archive.extractfile(matches[0]).read()); binary.chmod(0o700)\n        subprocess.run([str(binary),'--version'],check=True)\n"
+    ],
+    [
+      "python3",
+      "-c",
+      "import json,pathlib,subprocess,time,urllib.request\nroot=pathlib.Path('/workspace')\nlog=(root/'tempo.log').open('ab')\np=subprocess.Popen(['/workspace/tempo','--log.stdout.filter','warn','node','--dev','--dev.block-time','1s','--http.addr','127.0.0.1','--http.port','8645','--authrpc.port','8651','--port','30313','--datadir','/workspace/tempo-chain'],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)\n(root/'tempo.pid').write_text(str(p.pid))\ntry:\n for attempt in range(30):\n  if p.poll() is not None:raise RuntimeError((root/'tempo.log').read_text()[-3000:])\n  try:\n   request=urllib.request.Request('http://127.0.0.1:8645',data=json.dumps({'jsonrpc':'2.0','id':1,'method':'eth_chainId','params':[]}).encode(),headers={'Content-Type':'application/json'})\n   response=json.load(urllib.request.urlopen(request,timeout=1))\n   if response.get('result'):\n    print(json.dumps({'rpc':'http://127.0.0.1:8645','chainId':response['result']}));break\n  except Exception:pass\n  time.sleep(1)\n else:raise RuntimeError('Tempo development RPC did not become ready')\nexcept Exception:\n p.terminate()\n raise\n"
+    ]
+  ],
+  "readiness": [
+    [
+      "python3",
+      "-c",
+      "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:8645',data=b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}',headers={'Content-Type':'application/json'}); v=json.load(urllib.request.urlopen(r,timeout=3)); assert v.get('result'); print(json.dumps(v))"
+    ]
+  ],
+  "artifacts": [
+    "/workspace/tempo.log"
+  ]
+}
