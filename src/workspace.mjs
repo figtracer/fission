@@ -77,7 +77,7 @@ export async function start(name, prepared) {
       // The job identity is persisted before launch. An ambiguous result is observed,
       // never automatically replayed or mistaken for failed preparation.
       state.bootstrapJob = "bootstrap";
-      state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.loaner/jobs/bootstrap/output.log"])] };
+      state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log"])] };
       await save(state);
       await launch(state, "bootstrap", commands, state.durationSeconds, state.recipe.readiness || []);
       return state;
@@ -171,7 +171,7 @@ export async function upload(state, local, remote) {
   // The payment gateway rejected 48 KiB request chunks. Keep payloads small
   // enough for its payment-challenge headers as well as the JSON body.
   const chunkBytes = 4 * 1024;
-  const temp = remote + ".loaner-" + randomUUID();
+  const temp = remote + ".fission-" + randomUUID();
   const script = "import sys,base64,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
   for (let offset = 0; offset < Math.max(bytes.length, 1); offset += chunkBytes) {
     const result = await execute(state, ["python3", "-c", script, temp, offset ? "ab" : "xb", bytes.subarray(offset, offset + chunkBytes).toString("base64")], operationCap);
@@ -230,13 +230,13 @@ export async function close(name, options) {
       await mkdir(staging, { recursive: false, mode: 0o700 });
       for (const path of state.recipe.artifacts) await download(state, path, join(staging, basename(path)));
       // Require a fresh destination; do not merge with or overwrite existing work.
-      const reserved = await open(`${output}.loaner-reservation`, "wx", 0o600);
+      const reserved = await open(`${output}.fission-reservation`, "wx", 0o600);
       await reserved.close();
       try {
         await mkdir(output, { recursive: false });
         await rename(staging, output);
       } catch (error) { throw new Error(`Export retained at ${staging}: ${error.message}`); }
-      finally { await unlink(`${output}.loaner-reservation`); }
+      finally { await unlink(`${output}.fission-reservation`); }
       state.exportedTo = output;
       await save(state);
     }

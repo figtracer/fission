@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { directory, locked, load, save, readJSON, writeJSON } from "./state.mjs";
@@ -11,7 +11,7 @@ const jobPath = (name, id) => {
   if (!/^[a-z][a-z0-9-]{0,47}$/.test(id || "")) throw new Error("Use a lowercase job name, up to 48 characters.");
   return join(directory(name), "jobs", `${id}.json`);
 };
-const remotePath = (id) => `/workspace/.loaner/jobs/${id}`;
+const remotePath = (id) => `/workspace/.fission/jobs/${id}`;
 export const jobDone = (job) => ["succeeded", "failed", "timed_out", "workspace_terminated"].includes(job.phase);
 
 export async function launch(state, id, commands, seconds, readiness = [], cwd = "/workspace") {
@@ -73,7 +73,7 @@ export async function getJob(name, id, refresh = false, options = {}) {
       await writeJSON(file, job);
       return job;
     }
-    const result = await execute(state, ["python3", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.read_text() if p.exists() else '{\"phase\":\"launch_unknown\"}')", `${remotePath(id)}/status.json`], operationCap, undefined, options);
+    const result = await execute(state, ["python3", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.read_text() if p.exists() else '{\"phase\":\"launch_unknown\"}')", `${dirname(job.log)}/status.json`], operationCap, undefined, options);
     if (result.returncode) throw new Error("Could not observe remote job. Saved job remains unresolved.");
     const observation = JSON.parse(result.stdout);
     if (!["launch_unknown", "running", "waiting", "failed", "succeeded", "timed_out"].includes(observation.phase)) throw new Error("Invalid remote job status.");

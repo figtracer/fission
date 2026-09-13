@@ -28,7 +28,6 @@ export const profiles = {
   "reth-synced": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 2048, p2p: true },
   "tempo-source": { os: "linux", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 200 },
   "tempo-node": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 16, memoryGiB: 32, diskGiB: 1024, p2p: true },
-  "windows-source": { os: "windows", kind: "vm", architecture: "x86_64", cpu: 4, memoryGiB: 16, diskGiB: 150 },
 };
 
 export function match(requirements) {

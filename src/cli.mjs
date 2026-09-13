@@ -10,14 +10,14 @@ import { providers, profiles, createPlan, openPlan } from "./plans.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 
-const help = `loaner — temporary workspaces paid with Tempo
+const help = `fission — temporary workspaces paid with Tempo
 
   capabilities
   budget [--total-spend AMOUNT --approve]
   plan NAME --recipe linux|foundry|reth|tempo|FILE --duration 2h
     --max-spend 1 --total-spend 2 [--profile runtime|foundry-source|reth-source|
-    reth-synced|tempo-source|tempo-node|windows-source]
-    [--os linux|windows --arch x86_64 --kind sandbox|vm --cpu N --memory GiB --disk GiB]
+    reth-synced|tempo-source|tempo-node]
+    [--os linux --arch x86_64 --kind sandbox|vm --cpu N --memory GiB --disk GiB]
     [--repo https://github.com/OWNER/REPO --ref FULL_COMMIT]
   open NAME --plan ID --approve
   run NAME JOB --duration 10m -- COMMAND [ARG...]
@@ -42,7 +42,7 @@ Ctrl-C stops watching, not the remote workspace. Deadlines are estimates until
 the provider confirms termination. Save work before expiry.
 
 Node >=22.13, the existing Tempo CLI login, and network access are required.
-LOANER_HOME selects the state directory; LOANER_TEMPO selects the Tempo binary.
+FISSION_HOME selects the state directory; FISSION_TEMPO selects the Tempo binary.
 `;
 
 function summary(state) {
@@ -80,7 +80,7 @@ function table(states) {
     const end = done ? Date.parse(state.closedAt || state.observedAt) : now;
     rows.push([state.name, state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
   }
-  if (rows.length === 1) return "No saved workspaces. Use loaner open --help.";
+  if (rows.length === 1) return "No saved workspaces. Use fission open --help.";
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => safeText(row[i]).length)));
   return rows.map((row) => row.map((cell, i) => safeText(cell).padEnd(widths[i])).join("  ")).join("\n");
 }
@@ -111,7 +111,7 @@ async function main() {
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
   const arity = { capabilities: 1, budget: 1, plan: 2, open: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
-  if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run loaner --help.`);
+  if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
@@ -203,7 +203,7 @@ async function main() {
       finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); }
       break;
     }
-    default: throw new Error(`Unknown command ${command}. Run loaner --help.`);
+    default: throw new Error(`Unknown command ${command}. Run fission --help.`);
   }
 }
 
@@ -211,7 +211,7 @@ main().catch((error) => {
   const args = process.argv.slice(2);
   const options = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
   if (options.includes("--json") || ["capabilities", "budget", "plan", "run", "job", "wait"].includes(args[0]))
-    console.error(JSON.stringify({ error: { code: "LOANER_ERROR", message: error.message } }));
-  else console.error(`loaner: ${error.message}`);
+    console.error(JSON.stringify({ error: { code: "FISSION_ERROR", message: error.message } }));
+  else console.error(`fission: ${error.message}`);
   process.exitCode = 1;
 });

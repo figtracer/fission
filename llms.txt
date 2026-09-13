@@ -1,8 +1,8 @@
-# Loaner
+# Fission
 
 Temporary compute operated by your local coding agent.
 
 - [Agent workflow](AGENTS.md): planning, authorization, jobs, readiness, recovery, and cleanup.
 - [Quick start](README.md): available capabilities and current provider limits.
 
-Run `loaner capabilities` for machine-readable provider/profile availability and `loaner --help` for commands. Unavailable profiles are rejected before payment. Use a saved plan and aggregate budget; do not silently downgrade machine requirements.
+Run `fission capabilities` for machine-readable provider/profile availability and `fission --help` for commands. Unavailable profiles are rejected before payment. Use a saved plan and aggregate budget; do not silently downgrade machine requirements.

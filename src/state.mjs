@@ -1,9 +1,13 @@
+import { existsSync } from "node:fs";
 import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-export const root = resolve(process.env.LOANER_HOME || join(homedir(), ".local/state/loaner"));
+// Keep existing budgets and unresolved machines attached after the product rename.
+const legacyRoot = join(homedir(), ".local/state/loaner");
+export const root = resolve(process.env.FISSION_HOME || process.env.LOANER_HOME ||
+  (existsSync(legacyRoot) ? legacyRoot : join(homedir(), ".local/state/fission")));
 
 export function directory(name) {
   if (!/^[a-z][a-z0-9-]{0,47}$/.test(name || ""))

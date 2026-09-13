@@ -7,7 +7,7 @@ import { directory, readJSON, writeJSON } from "./state.mjs";
 import { units, reserve } from "./budget.mjs";
 
 const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
-const tempo = process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
+const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
 
 export const money = units;
 
