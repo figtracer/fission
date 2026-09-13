@@ -1,14 +1,21 @@
 import { join, basename } from "node:path";
+import { mkdir, readFile, access } from "node:fs/promises";
 import { randomUUID, createHash } from "node:crypto";
 import { root, directory, readJSON, writeJSON } from "./state.mjs";
 import { recipe, duration, start } from "./workspace.mjs";
-import { quote, money } from "./provider.mjs";
+import { quote, money, runProcess } from "./provider.mjs";
+import { catalog, machineCapabilities } from "./compute.mjs";
+import { amount, vmCeiling } from "./budget.mjs";
 
 export const providers = [{
   id: "modal-tempo", available: true,
   capabilities: { os: "linux", kind: "sandbox", architecture: null, cpu: null, memoryGiB: null, diskGiB: null, p2p: false, customImage: false, expiry: true },
   evidence: "https://modal.mpp.tempo.xyz",
   limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
+}, {
+  id: "x402-compute", available: true,
+  limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Minimum prepaid lease is 24 hours; early deletion does not imply a refund. SSH execution, jobs, export and destruction observed on a small VM. Large-disk allocation, P2P and synced-node performance remain unverified. No separate volume attachment or custom image support.",
+  evidence: "https://docs.x402layer.cc/agentic-access/x402-compute",
 }, {
   id: "smol-orthogonal", available: false,
   reason: "Lifecycle API returned expired_key on 2026-09-13. No purchase until authenticated lifecycle operations work.",
@@ -33,6 +40,7 @@ export const profiles = {
 export function match(requirements) {
   return providers.map((provider) => {
     if (!provider.available) return { provider: provider.id, unmet: [provider.reason] };
+    if (!provider.capabilities) return { provider: provider.id, unmet: ["Select a compatible machine from machines with --provider x402-compute."] };
     const unmet = Object.entries(requirements).filter(([key, value]) => {
       const supplied = provider.capabilities[key];
       return supplied == null || (typeof value === "number" ? supplied < value : supplied !== value);
@@ -47,9 +55,7 @@ const planFile = (id) => {
   return join(root, ".plans", `${id}.json`);
 };
 
-export async function createPlan(name, options) {
-  directory(name);
-  if (await readJSON(join(directory(name), "state.json"))) throw new Error("Workspace name already recorded.");
+export function requirementsFor(options) {
   const profile = options.profile || "runtime";
   if (!profiles[profile]) throw new Error("Unknown profile. Run capabilities.");
   const requirements = { ...profiles[profile] };
@@ -65,23 +71,115 @@ export async function createPlan(name, options) {
       requirements[field] = Math.max(requirements[field] || 0, value);
     }
   }
-  const matches = match(requirements);
-  if (!matches.some((item) => item.unmet.length === 0)) return { version: 1, status: "unavailable", name, profile, requirements, candidates: matches, paymentSubmitted: false };
+  return { profile, requirements };
+}
+
+// A short, fixed-size sample keeps discovery useful without quoting an entire
+// catalog. It is the cheapest compatible shortlist, never a market-wide average.
+const shortlistSize = 3;
+const catalogPrice = (machine) => {
+  if (typeof machine.our_daily !== "number" || !Number.isFinite(machine.our_daily) || machine.our_daily <= 0)
+    throw new Error("Missing daily catalog price.");
+  return money(String(machine.our_daily));
+};
+
+export async function machineOffers(options) {
+  const { profile, requirements } = requirementsFor({ kind: "vm", ...options });
+  const cap = await vmCeiling(profile, options["max-spend"]);
+  if (cap === null || money(cap) <= 0n) throw new Error("Set a VM ceiling with budget --vm-max-spend AMOUNT --approve, or pass machines --max-spend AMOUNT for discovery.");
+  if (!/^[a-z0-9-]+$/.test(options.region || "")) throw new Error("Select --region, such as ams. Compare offers in the same region.");
+  if (duration(options.duration || "24h") !== 86400) throw new Error("VM offers currently require --duration 24h; early deletion does not imply a refund.");
+  const candidates = [], seen = new Set();
+  let compatible = 0, omitted = 0;
+  for (const machine of await catalog()) {
+    if (machine.provider !== "vultr" || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
+    seen.add(machine.id);
+    let capabilities, estimate;
+    try { capabilities = machineCapabilities(machine); estimate = catalogPrice(machine); }
+    catch { omitted++; continue; }
+    if (Object.entries(requirements).some(([key, value]) => capabilities[key] == null ||
+      (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value))) continue;
+    compatible++;
+    if (estimate > money(cap)) continue;
+    candidates.push({ machine, capabilities, estimate });
+  }
+  candidates.sort((a, b) => a.estimate < b.estimate ? -1 : a.estimate > b.estimate ? 1 : a.machine.id.localeCompare(b.machine.id));
+  const offers = [];
+  let quoteFailures = 0, changedBeyondCap = 0;
+  for (const { machine, capabilities, estimate } of candidates.slice(0, shortlistSize)) {
+    let offer;
+    try { offer = await quote("create", { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: 24, label: "fission-quote" }, "x402-compute"); }
+    catch { quoteFailures++; continue; }
+    if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
+    offers.push({ provider: "x402-compute", machine: machine.id, region: options.region, capabilities,
+      creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
+      quotedAt: new Date().toISOString(), leaseHours: 24 });
+  }
+  offers.sort((a, b) => money(a.creationQuote) < money(b.creationQuote) ? -1 : money(a.creationQuote) > money(b.creationQuote) ? 1 : a.machine.localeCompare(b.machine));
+  const prices = offers.map((offer) => money(offer.creationQuote));
+  return { status: offers.length ? "quoted" : "unavailable", profile, requirements, ceiling: cap, currency: "USDC.e",
+    region: options.region, leaseHours: 24, paymentSubmitted: false,
+    offers, average: prices.length ? { amount: amount((prices.reduce((a, b) => a + b, 0n) + BigInt(prices.length) - 1n) / BigInt(prices.length)),
+      minimum: amount(prices[0]), maximum: amount(prices.at(-1)), sampleCount: prices.length, providerCount: 1,
+      basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for 24 hours. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
+    excluded: { overCeiling: compatible - candidates.length + changedBeyondCap, incompleteCatalog: omitted, quoteFailures },
+    note: offers.length ? "Capacity and inventory are provider catalog claims; plan and open re-quote before payment. Leave allocation room for lifecycle operations." : "No verified quote within the ceiling. Requirements and budget were preserved." };
+}
+
+export async function createPlan(name, options) {
+  directory(name);
+  const previous = await readJSON(join(directory(name), "state.json"));
+  if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
+  const provider = options.provider || "modal-tempo";
+  const { profile, requirements } = requirementsFor({ ...(provider === "x402-compute" ? { kind: "vm" } : {}), ...options });
+  if (!["modal-tempo", "x402-compute"].includes(provider)) throw new Error("Unknown provider.");
+  let machine, capabilities;
+  if (provider === "x402-compute") {
+    machine = (await catalog()).find((item) => item.id === options.machine && item.provider === "vultr");
+    if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a Vultr --machine and --region from the live compute catalog.");
+    capabilities = machineCapabilities(machine);
+    const unmet = Object.entries(requirements).filter(([key, value]) => capabilities[key] == null ||
+      (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value)).map(([key, value]) => `${key}=${value}`);
+    if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
+    if (duration(options.duration) !== 86400) return { status: "unavailable", reason: "This provider requires a 24-hour prepaid lease. Select --duration 24h explicitly; early deletion does not imply a refund.", paymentSubmitted: false };
+  } else {
+    if (options.machine || options.region) throw new Error("Machine and region require --provider x402-compute.");
+    const matches = match(requirements);
+    if (!matches.some((item) => item.provider === provider && item.unmet.length === 0)) return { version: 1, status: "unavailable", name, profile, requirements, candidates: matches, paymentSubmitted: false };
+  }
   const definition = await recipe(options.recipe || "linux");
   if (definition.artifacts.some((path) => basename(path) === "output.log")) throw new Error("output.log is reserved for the bootstrap artifact; use another artifact basename.");
   const timeout = duration(options.duration);
   const totalCap = options["total-spend"], creationCap = options["max-spend"];
   if (money(creationCap) <= 0n || money(totalCap) < money(creationCap) + 300n)
     throw new Error("Set --total-spend above the creation cap, leaving at least a launch and two shutdown calls (0.0003).");
+  if (machine) {
+    const cap = await vmCeiling(profile);
+    if (cap !== null && money(totalCap) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
+    if (catalogPrice(machine) > money(creationCap)) return { status: "unavailable", reason: "Catalog estimate exceeds the creation cap; no quote or payment submitted.", requirements, paymentSubmitted: false };
+  }
   let source;
   if (options.repo || options.ref) {
     if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(options.repo || "") || !/^[a-f0-9]{40}$/.test(options.ref || ""))
       throw new Error("Source requires a public GitHub --repo URL and exact 40-character --ref commit. Upload private work explicitly.");
     source = { url: options.repo, commit: options.ref };
   }
-  const offer = await quote("create", { timeout });
+  let body = { timeout };
+  if (machine) {
+    await mkdir(directory(name), { recursive: true, mode: 0o700 });
+    const key = join(directory(name), "id_ed25519");
+    try { await access(key); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const result = await runProcess("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "fission", "-f", key]);
+      if (result.code !== 0) throw new Error("Could not create workspace SSH key.");
+    }
+    body = { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
+      prepaid_hours: 24, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
+  }
+  const offer = await quote("create", body, provider);
   if (money(offer.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
-  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider: "modal-tempo", kind: "linux-sandbox", capabilities: providers[0], durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body: { timeout }, createdAt: new Date().toISOString() };
+  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, createdAt: new Date().toISOString() };
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
   return value;
@@ -92,9 +190,17 @@ export async function openPlan(name, id) {
   if (!value || value.name !== name) throw new Error("Saved plan does not match workspace name.");
   const { digest: expected, ...contents } = value;
   if (digest(contents) !== expected) throw new Error("Plan changed after creation. Generate a fresh plan.");
-  if (!match(value.requirements).some((item) => item.provider === value.provider && !item.unmet.length))
+  if (value.provider === "x402-compute") {
+    const cap = await vmCeiling(value.profile);
+    if (cap !== null && money(value.totalCap) > money(cap)) throw new Error("Saved allocation exceeds the current VM ceiling. Generate a lower-budget plan.");
+    const current = (await catalog()).find((item) => item.id === value.body.plan && item.provider === "vultr");
+    if (!current || !current.locations.includes(value.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(value.capabilities))
+      throw new Error("Compute plan capacity changed. Generate a fresh plan.");
+    if ((await readFile(join(directory(name), "id_ed25519.pub"), "utf8")).trim() !== value.body.ssh_public_key)
+      throw new Error("Workspace SSH public key changed after planning.");
+  } else if (!match(value.requirements).some((item) => item.provider === value.provider && !item.unmet.length))
     throw new Error("Provider no longer satisfies the saved requirements.");
-  const offer = await quote("create", value.body);
+  const offer = await quote("create", value.body, value.provider);
   if (money(offer.amount) > money(value.creationCap)) throw new Error("Current quote exceeds the approved creation cap.");
   return start(name, { ...value, creationQuote: offer.amount, asyncPreparation: true });
 }

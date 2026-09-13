@@ -3,23 +3,31 @@ import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { list, load, locked } from "./state.mjs";
 import { execute, money } from "./provider.mjs";
-import { plan, start, refresh, reconcile, active, upload, download, close, operationCap } from "./workspace.mjs";
+import { plan, start, refresh, reconcile, active, upload, download, close, operationCap, prepare } from "./workspace.mjs";
 
 import { budget } from "./budget.mjs";
-import { providers, profiles, createPlan, openPlan } from "./plans.mjs";
+import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 
 const help = `fission — temporary workspaces paid with Tempo
 
   capabilities
+  ui
+  ssh NAME
+  spending [--refresh]
+  machines --profile reth-source --region ams [--max-spend AMOUNT --duration 24h]
+    [--cpu N --memory GiB --disk GiB --os linux --arch x86_64 --kind vm]
   budget [--total-spend AMOUNT --approve]
+    [--vm-max-spend AMOUNT --profile PROFILE --approve]
   plan NAME --recipe linux|foundry|reth|tempo|FILE --duration 2h
     --max-spend 1 --total-spend 2 [--profile runtime|foundry-source|reth-source|
     reth-synced|tempo-source|tempo-node]
     [--os linux --arch x86_64 --kind sandbox|vm --cpu N --memory GiB --disk GiB]
     [--repo https://github.com/OWNER/REPO --ref FULL_COMMIT]
+    [--provider x402-compute --machine PLAN --region REGION --duration 24h]
   open NAME --plan ID --approve
+  prepare NAME
   run NAME JOB --duration 10m -- COMMAND [ARG...]
   jobs NAME
   job NAME JOB [--refresh]
@@ -36,7 +44,8 @@ const help = `fission — temporary workspaces paid with Tempo
   reconcile NAME
 
 open previews unless --approve is supplied. Creation cap excludes later calls.
-exec/status/terminate cost at most ${operationCap} USDC.e per request.
+Modal exec/status/terminate cost at most ${operationCap} USDC.e per request.
+Compute VM management and SSH calls are free after the prepaid rental.
 File transfers use multiple requests. watch stays local unless --refresh is set.
 Ctrl-C stops watching, not the remote workspace. Deadlines are estimates until
 the provider confirms termination. Save work before expiry.
@@ -51,6 +60,7 @@ function summary(state) {
     remoteId: state.remoteId, recipe: state.recipe.name,
     requestedAt: state.requestedAt, readyAt: state.readyAt,
     deadlineEstimate: state.deadlineEstimate, observedAt: state.observedAt,
+    providerExpiresAt: state.providerExpiresAt,
     closedAt: state.closedAt,
     remoteStatus: state.remoteStatus, exportedTo: state.exportedTo,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
@@ -73,12 +83,12 @@ function time(ms) {
 
 function table(states) {
   const now = Date.now();
-  const rows = [["NAME", "STATE", "ELAPSED", "LEFT (EST.)", "LAST CHECK"]];
+  const rows = [["NAME", "STATE", "ELAPSED", "LEFT", "LAST CHECK"]];
   for (const state of states) {
     const done = ["terminated", "expired"].includes(state.phase);
-    const left = Date.parse(state.deadlineEstimate) - now;
+    const left = Date.parse(state.providerExpiresAt || state.deadlineEstimate) - now;
     const end = done ? Date.parse(state.closedAt || state.observedAt) : now;
-    rows.push([state.name, state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
+    rows.push([state.name, state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left) + (state.providerExpiresAt ? "" : " (est.)"), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
   }
   if (rows.length === 1) return "No saved workspaces. Use fission open --help.";
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => safeText(row[i]).length)));
@@ -93,16 +103,17 @@ async function main() {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
-    cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" },
+    provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
+    cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
     recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
   } });
   const [command, name, first, second] = positionals;
   if (!command || values.help) { console.log(help); return; }
   const allowed = {
-    capabilities: [], budget: ["total-spend", "approve"],
-    plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref"],
+    capabilities: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
-    recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
+    prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
     jobs: [], run: ["duration"], job: ["refresh"], wait: ["duration", "max-spend"],
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
@@ -110,15 +121,24 @@ async function main() {
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { capabilities: 1, budget: 1, plan: 2, open: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { capabilities: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
-    case "capabilities": emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "cores" } }); break;
+    case "ui": await (await import("./ui.mjs")).ui(); break;
+    case "ssh": process.exitCode = await (await import("./compute.mjs")).connect(name); break;
+    case "spending": emit(await (await import("./payments.mjs")).spending({ refresh: values.refresh })); break;
+    case "machines": {
+      const value = await machineOffers(values); emit(value);
+      if (value.status === "unavailable") process.exitCode = 2;
+      break;
+    }
+    case "capabilities": emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" } }); break;
     case "budget":
-      if (values["total-spend"] && !values.approve) throw new Error("Use --approve to record the authorized aggregate budget.");
-      emit(await budget(values["total-spend"])); break;
+      if ((values["total-spend"] !== undefined || values["vm-max-spend"] !== undefined) && !values.approve) throw new Error("Use --approve to record an authorized budget or VM ceiling.");
+      if (values.profile && (!profiles[values.profile] || values["vm-max-spend"] === undefined)) throw new Error("Use a known --profile with --vm-max-spend.");
+      emit(await budget(values["total-spend"], { vmMaxSpend: values["vm-max-spend"], profile: values.profile })); break;
     case "plan": {
       const value = await createPlan(name, values); emit(value);
       if (value.status === "unavailable") process.exitCode = 2;
@@ -155,6 +175,7 @@ async function main() {
       values.json ? emit(summary(state)) : console.log(table([state]));
       break;
     }
+    case "prepare": emit(summary(await prepare(name))); break;
     case "reconcile": emit(summary(await reconcile(name))); break;
     case "exec": {
       const result = await locked(name, async () => execute(await active(name), tail, operationCap));

@@ -12,8 +12,19 @@ const path = join(root, ".budget.json");
 const lock = (fn) => fileLocked(join(root, ".budget.lock"), fn);
 // Two gateway calls remain available for a termination and its confirmation.
 const terminationReserve = 200n;
+export class BudgetRejected extends Error {}
 
-export async function budget(limit) {
+function summarize(ledger) {
+  if (!ledger) throw new Error("Initialize an aggregate budget with budget --total-spend AMOUNT --approve.");
+  const allocated = Object.values(ledger.allocations).reduce((sum, item) => sum + units(item), 0n);
+  const reserved = Object.values(ledger.requests).reduce((sum, item) => sum + units(item.maximum), 0n);
+  return { limit: ledger.limit, allocated: amount(allocated), reserved: amount(reserved), availableToAllocate: amount(units(ledger.limit) - allocated), allocations: ledger.allocations, vmCaps: ledger.vmCaps || {} };
+}
+
+export async function budget(limit, { vmMaxSpend, profile } = {}) {
+  // Atomic rename makes a read snapshot coherent. Observers must not compete
+  // with the fail-fast authorization/reservation lock.
+  if (limit === undefined && vmMaxSpend === undefined) return summarize(await readJSON(path));
   return lock(async () => {
     const existing = await readJSON(path);
     if (limit !== undefined) {
@@ -27,10 +38,24 @@ export async function budget(limit) {
     }
     const ledger = existing || await readJSON(path);
     if (!ledger) throw new Error("Initialize an aggregate budget with budget --total-spend AMOUNT --approve.");
-    const allocated = Object.values(ledger.allocations).reduce((sum, item) => sum + units(item), 0n);
-    const reserved = Object.values(ledger.requests).reduce((sum, item) => sum + units(item.maximum), 0n);
-    return { limit: ledger.limit, allocated: amount(allocated), reserved: amount(reserved), availableToAllocate: amount(units(ledger.limit) - allocated), allocations: ledger.allocations };
+    if (vmMaxSpend !== undefined) {
+      if (units(vmMaxSpend) <= 0n || units(vmMaxSpend) > units(ledger.limit))
+        throw new Error("VM ceiling must be positive and within the aggregate authorization.");
+      ledger.vmCaps = { ...ledger.vmCaps, [profile || "default"]: vmMaxSpend };
+      await writeJSON(path, ledger);
+    }
+    return summarize(ledger);
   });
+}
+
+function ceiling(ledger, profile, requested) {
+  const limits = [ledger?.vmCaps?.default, ledger?.vmCaps?.[profile], requested].filter((value) => value !== undefined);
+  if (!limits.length) return null;
+  return amount(limits.map(units).reduce((a, b) => a < b ? a : b));
+}
+
+export async function vmCeiling(profile, requested) {
+  return ceiling(await readJSON(path), profile, requested);
 }
 
 export async function hasTerminationReservation(state) {
@@ -43,6 +68,11 @@ export async function reserve(state, operation, maximum, id) {
     const ledger = await readJSON(path);
     if (!ledger && !state.totalCap) return; // Existing creation-only workflows remain compatible.
     if (!ledger) throw new Error("Initialize the aggregate budget before purchasing a persisted plan.");
+    if (operation === "create" && state.kind === "linux-vm") {
+      const maximumVM = ceiling(ledger, state.profile);
+      if (maximumVM !== null && units(state.totalCap) > units(maximumVM))
+        throw new BudgetRejected("Workspace allocation exceeds the configured VM ceiling. Generate a lower-budget plan.");
+    }
     if (ledger.requests[id]) throw new Error("Payment already reserved. Reconcile; never resubmit this request.");
     const cap = state.totalCap || ledger.allocations[state.name];
     if (!cap) throw new Error("This legacy workspace has no allocation in the active aggregate budget.");

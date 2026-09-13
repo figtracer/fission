@@ -22,7 +22,7 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   for (const command of [...commands, ...readiness])
     if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Job commands must be nonempty argv arrays.");
-  const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.deadlineEstimate) / 1000);
+  const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000);
   if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("Insufficient estimated lease time for a new job.");
   const spec = { id, commands, readiness, cwd, deadline, pollSeconds: 15 };
   const job = { id, name: state.name, phase: "launch_unknown", requestId: randomUUID(), spec, digest: createHash("sha256").update(JSON.stringify(spec)).digest("hex"), log: `${remotePath(id)}/output.log` };

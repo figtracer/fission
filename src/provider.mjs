@@ -38,8 +38,9 @@ export function runProcess(command, args, options = {}) {
   });
 }
 
-export async function quote(operation, body) {
-  const result = await runProcess(tempo, ["request", "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), endpoint + operation]);
+export async function quote(operation, body, provider = "modal-tempo") {
+  const url = provider === "x402-compute" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
+  const result = await runProcess(tempo, ["request", "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url]);
   if (result.code !== 0) throw new Error(`Quote unavailable: ${result.stderr.trim() || result.stdout.trim()}`);
   let offer;
   try { offer = JSON.parse(result.stdout); } catch { throw new Error("Provider returned an unreadable quote."); }
@@ -51,6 +52,8 @@ export async function quote(operation, body) {
 }
 
 export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
+  if (state.provider === "x402-compute" && operation !== "create")
+    return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
   const responsePath = join(dir, `${id}.response.json`);
@@ -61,7 +64,8 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   for (const path of [responsePath, metaPath]) {
     const file = await open(path, "wx", 0o600); await file.close();
   }
-  const result = await runProcess(tempo, ["request", "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, endpoint + operation], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+  const url = state.provider === "x402-compute" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
+  const result = await runProcess(tempo, ["request", "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
   let response;
   try { response = JSON.parse(responseText); } catch { /* Preserve the raw response for recovery. */ }
@@ -71,6 +75,10 @@ export async function request(state, operation, body, maximum, id = randomUUID()
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}). Saved response: ${responsePath}. Do not repeat the payment.`);
   }
   if (response.error || response.detail) throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
+  if (state.provider === "x402-compute") {
+    const { adopt } = await import("./compute.mjs");
+    return { sandbox_id: await adopt(state, response) };
+  }
   return response;
 }
 
@@ -78,8 +86,14 @@ export async function recoverCreate(state) {
   const path = join(directory(state.name), "requests", `${state.createRequest}.response.json`);
   let response;
   try { response = await readJSON(path); } catch { return null; }
+  if (state.provider === "x402-compute" && response)
+    return (await import("./compute.mjs")).adopt(state, response);
   return response && /^sb-[A-Za-z0-9]+$/.test(response.sandbox_id || "") ? response.sandbox_id : null;
 }
+
+export const validRemoteId = (state, id) => state.provider === "x402-compute"
+  ? /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id || "")
+  : /^sb-[A-Za-z0-9]+$/.test(id || "");
 
 export async function execute(state, command, maximum, id, options) {
   if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== "string" || arg.includes("\0")))

@@ -2,43 +2,34 @@
 
 temporary compute for your coding agent.
 
-Fission lets your local agent plan a workspace, pay through Tempo, prepare tools, run jobs, collect files, and close the workspace when the task is done. Remote jobs survive the local CLI exiting; the provider enforces the workspace lifetime.
+Plan a machine, pay through Tempo, prepare tools, run durable jobs, collect files, and close it when the task is done. Your agent and wallet stay local.
 
-## Use
-
-Requires Node >=22.13 and a configured Tempo CLI wallet.
+Requires Node >=22.13, SSH and a configured Tempo CLI wallet. Clone this repository and run `npm link --ignore-scripts`.
 
 ```sh
-git clone https://github.com/figtracer/fission.git
-cd fission
-npm link --ignore-scripts
-
-fission capabilities
-fission budget --total-spend 5 --approve
-fission plan change --recipe foundry --duration 2h --max-spend 1 --total-spend 2
+fission budget --total-spend 30 --vm-max-spend 10 --approve
+fission ui
+fission machines --profile reth-source --region ams --duration 24h
+fission plan change --recipe linux --profile reth-source \
+  --provider x402-compute --machine MACHINE --region ams \
+  --duration 24h --max-spend 8 --total-spend 9
 fission open change --plan PLAN_ID --approve
 fission wait change bootstrap --duration 5m --max-spend 0.01
-
-fission run change version --duration 1m -- /workspace/forge --version
-fission job change version --refresh
+fission run change info --duration 1m -- uname -a
 fission watch
 fission close change --output ./saved-change
 ```
 
-Give your agent [AGENTS.md](AGENTS.md). `plan`, `run`, `job`, `wait`, and `capabilities` return JSON. `list` and `status` accept `--json`. Plans preserve recipe digests, requirements, budgets and optional source commits. Add `--repo https://github.com/OWNER/REPO --ref FULL_COMMIT` for a public source checkout. Private files use explicit `upload`/`download` commands.
+`ui` shows active and past machines, sortable by name, spend or expiry. Enter opens details, then SSH for a ready VM; `x` saves declared output and closes it. `v` verifies payment amounts and transaction references through free Tempo RPC reads. Missing receipts remain unknown. `spending` exposes the same data as JSON; paid amounts include sender USDC.e fees and exclude other assets and later refunds.
 
-## Available now
+Give your agent [AGENTS.md](AGENTS.md) or [llms.txt](llms.txt). Agents use JSON commands directly. Add `--repo https://github.com/OWNER/REPO --ref FULL_COMMIT` for a public source checkout. Upload private files explicitly.
 
-**Modal via Tempo:** Linux sandboxes with opportunistic capacity. Recipes supply Python, Foundry 1.8.1, Reth 2.5.2 with a local development chain, or Tempo 1.14.0 with an isolated development chain. Downloads are checksum pinned. Jobs have durable IDs, logs, deadlines and optional readiness commands. No model or wallet runs in the guest.
+**Available:** Linux x86 VMs through x402Compute/Vultr, prepaid for 24 hours, with SSH and provider expiry. Modal via Tempo supplies shorter Linux sandboxes with opportunistic capacity. Recipes provide Python, pinned Foundry tools, or isolated Reth/Tempo development chains. Source checkout does not compile a client. Custom JSON recipes add preparation and readiness commands.
 
-**Not available:** guaranteed-size builds, full VMs, custom images, or a synced Reth/Lighthouse deployment. Their resource profiles fail before payment; they are requirements, not working providers. Smol’s gateway currently rejects lifecycle access; AgentVM’s MPP profile does not meet the capacity/lifecycle contract. The included Ethereum readiness observer checks peers, sync, fresh execution head and non-optimistic consensus; it does not deploy nodes.
+**Pricing:** `machines` shows up to three cheapest compatible quotes under the VM ceiling, with their average, range and sample size. The average covers creation, is limited to the queried catalog, and never authorizes spending. `budget --vm-max-spend AMOUNT --approve` sets a whole-workspace ceiling; add `--profile PROFILE` to narrow it. Explicit discovery caps can narrow it further. Saved plans and payments recheck the ceiling. The aggregate ledger allocates each workspace's full `--total-spend`; failed request caps and closed allocations are retained. Network fees are separate.
 
-## Lifetime and spending
+**Limits:** full Reth keeps its 32 GiB RAM and 2 TiB disk floor. No affordable full-node deployment, separate volumes, custom images, or synced Reth/Lighthouse recipe is verified yet. The included Ethereum observer checks an already configured pair. Provider catalog capacity does not establish workload performance.
 
-Close explicitly when finished. A closed terminal, successful job or closed PR does not terminate the workspace. `close --output` exports declared files and bootstrap logs first; use `download` for other outputs. Failed export preserves the workspace until expiry. `--discard-output` closes without saving.
+Close explicitly when finished; a successful job or closed terminal does not delete a machine. `close --output` saves declared artifacts and bootstrap output; use `download` for other files. Failed exports preserve the machine until expiry. Ambiguous deletion requires provider observation. Preserve `FISSION_HOME` and use `reconcile` after interrupted creation. Legacy Loaner state is reused when present, including its budget.
 
-The aggregate budget conservatively allocates each workspace’s `--total-spend`. Every gateway request reserves its cap, including failed or ambiguous calls. Allocations are not automatically reclaimed. `--max-spend` caps creation; later calls cost at most 0.0001 USDC.e each, and transfers require multiple calls. Network fees are separate. Two calls are reserved for shutdown/confirmation.
-
-Cached views are free; explicit refresh/wait is paid. Deadlines shown locally are estimates. Preserve `~/.local/state/fission` (`FISSION_HOME` overrides it). Existing `~/.local/state/loaner` records and `LOANER_HOME` remain supported; Fission reuses that ledger when present. Reconcile interrupted requests and retrieve files before expiry.
-
-References: [Glue](https://github.com/figtracer/glue), [Reth](https://reth.rs), [Foundry](https://getfoundry.sh), [Tempo](https://github.com/tempoxyz/tempo), [Modal](https://modal.com/docs/guide/sandboxes).
+References: [Glue](https://github.com/figtracer/glue), [Reth](https://reth.rs), [Foundry](https://getfoundry.sh), [Tempo](https://github.com/tempoxyz/tempo), [x402Compute](https://docs.x402layer.cc/agentic-access/x402-compute), [Modal](https://modal.com/docs/guide/sandboxes).

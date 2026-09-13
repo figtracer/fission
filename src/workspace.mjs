@@ -3,8 +3,8 @@ import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked } from "./state.mjs";
-import { quote, request, recoverCreate, execute, money } from "./provider.mjs";
-import { hasTerminationReservation } from "./budget.mjs";
+import { quote, request, recoverCreate, execute, money, validRemoteId } from "./provider.mjs";
+import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
 export const operationCap = "0.0001";
@@ -56,12 +56,22 @@ export async function plan(name, options) {
 
 export async function start(name, prepared) {
   return locked(name, async () => {
-    if (await readJSON(join(directory(name), "state.json")))
+    const previous = await readJSON(join(directory(name), "state.json"));
+    if (previous && previous.phase !== "not_submitted")
       throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");
     const state = { ...prepared, phase: "provisioning_unknown", createRequest: randomUUID(), requestedAt: new Date().toISOString(), remoteId: null };
     await save(state);
-    const response = await request(state, "create", state.body, state.creationCap, state.createRequest);
-    if (!/^sb-[A-Za-z0-9]+$/.test(response.sandbox_id || "")) throw new Error("Creation response has no valid sandbox ID. Reconcile before another purchase.");
+    let response;
+    try { response = await request(state, "create", state.body, state.creationCap, state.createRequest); }
+    catch (error) {
+      if (error instanceof BudgetRejected) {
+        state.phase = "not_submitted";
+        state.preparationError = error.message;
+        await save(state);
+      }
+      throw error;
+    }
+    if (!validRemoteId(state, response.sandbox_id)) throw new Error("Creation response has no valid machine ID. Reconcile before another purchase.");
     state.remoteId = response.sandbox_id;
     state.receivedAt = new Date().toISOString();
     // Gateway exposes no server creation timestamp. Show an estimated deadline,
@@ -69,19 +79,8 @@ export async function start(name, prepared) {
     state.deadlineEstimate = new Date(Date.parse(state.requestedAt) + state.durationSeconds * 1000).toISOString();
     state.phase = "preparing";
     await save(state);
-    if (state.asyncPreparation) {
-      const { launch } = await import("./jobs.mjs");
-      const commands = [...state.recipe.prepare];
-      if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
-      if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
-      // The job identity is persisted before launch. An ambiguous result is observed,
-      // never automatically replayed or mistaken for failed preparation.
-      state.bootstrapJob = "bootstrap";
-      state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log"])] };
-      await save(state);
-      await launch(state, "bootstrap", commands, state.durationSeconds, state.recipe.readiness || []);
-      return state;
-    }
+    if (state.asyncPreparation) return prepareState(state);
+
     try {
       for (const command of state.recipe.prepare) {
         const result = await execute(state, command, operationCap);
@@ -101,9 +100,29 @@ export async function start(name, prepared) {
   });
 }
 
-async function refreshState(state) {
+async function prepareState(state) {
+  if (!state.asyncPreparation || !state.remoteId || !["preparing", "preparation_pending"].includes(state.phase))
+    throw new Error("This workspace is not awaiting preparation.");
+  if (state.bootstrapJob) throw new Error("Bootstrap already recorded. Observe its existing job; do not launch it again.");
+  if (state.provider === "x402-compute") await (await import("./compute.mjs")).prepareAccess(state);
+  const { launch } = await import("./jobs.mjs");
+  const commands = [...state.recipe.prepare];
+  if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
+  if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
+  // The job identity is persisted before launch. An ambiguous result is observed,
+  // never automatically replayed or mistaken for failed preparation.
+  state.bootstrapJob = "bootstrap";
+  state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log"])] };
+  await save(state);
+  await launch(state, "bootstrap", commands, state.durationSeconds, state.recipe.readiness || []);
+  return state;
+}
+
+export const prepare = (name) => locked(name, async () => prepareState(await load(name)));
+
+async function refreshState(state, options) {
   if (!state.remoteId) throw new Error("No remote ID yet. Run reconcile to recover the saved create response.");
-  const response = await request(state, "status", { sandbox_id: state.remoteId }, operationCap);
+  const response = await request(state, "status", { sandbox_id: state.remoteId }, operationCap, undefined, options);
   if (!["running", "terminated"].includes(response.status)) throw new Error(`Unexpected status ${response.status}; inspect the saved response.`);
   state.observedAt = new Date().toISOString();
   state.remoteStatus = response.status;
@@ -120,7 +139,7 @@ async function refreshState(state) {
   return state;
 }
 
-export const refresh = (name) => locked(name, async () => refreshState(await load(name)));
+export const refresh = (name, options) => locked(name, async () => refreshState(await load(name), options));
 
 export async function reconcile(name) {
   return locked(name, async () => {
@@ -141,8 +160,16 @@ export async function reconcile(name) {
 async function terminate(state) {
   state.phase = "termination_unknown";
   await save(state);
-  const response = await request(state, "terminate", { sandbox_id: state.remoteId }, operationCap);
-  if (response.status !== "terminated") throw new Error("Provider did not confirm termination. Run status before retrying.");
+  try {
+    const response = await request(state, "terminate", { sandbox_id: state.remoteId }, operationCap);
+    if (response.status !== "terminated") throw new Error("Provider did not acknowledge termination.");
+  } catch (error) {
+    // A live VM DELETE timed out after destruction. Observe once, never replay
+    // the mutation merely because its acknowledgement was lost.
+    try { await refreshState(state); } catch { /* Keep the unresolved record. */ }
+    if (terminal(state)) return state;
+    throw new Error(`Termination is unconfirmed: ${error.message}. Run status --refresh before another close.`);
+  }
   state.remoteStatus = "termination_acknowledged";
   await save(state);
   // The gateway can acknowledge before the process has actually exited.
@@ -159,7 +186,7 @@ export async function active(name, requireReady = true) {
   const state = await load(name);
   if (!state.remoteId || terminal(state) || ["termination_unknown", "closing"].includes(state.phase))
     throw new Error(`Workspace is ${state.phase}; inspect status before executing work.`);
-  if (requireReady && state.bootstrapJob && state.phase !== "ready")
+  if (requireReady && (state.asyncPreparation || state.bootstrapJob) && state.phase !== "ready")
     throw new Error("Bootstrap is not ready. Inspect its job before submitting work.");
   // The local deadline is informational; only the provider knows actual expiry.
   return state;
