@@ -1,8 +1,8 @@
 import { join, basename } from "node:path";
 import { mkdir, readFile, access } from "node:fs/promises";
 import { randomUUID, createHash } from "node:crypto";
-import { root, directory, readJSON, writeJSON } from "./state.mjs";
-import { recipe, duration, start } from "./workspace.mjs";
+import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
+import { recipe, duration, start, sourceRecipes } from "./workspace.mjs";
 import { quote, money, runProcess, paymentTerms } from "./provider.mjs";
 import { catalog, machineCapabilities } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
@@ -13,9 +13,9 @@ export const providers = [{
   evidence: "https://modal.mpp.tempo.xyz",
   limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
 }, {
-  id: "x402-compute", available: true,
+  id: "compute-mpp", available: true,
   limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Minimum prepaid lease is 24 hours; early deletion does not imply a refund. SSH execution, jobs, export and destruction observed on a small VM. Large-disk allocation, P2P and synced-node performance remain unverified. No separate volume attachment or custom image support.",
-  evidence: "https://docs.x402layer.cc/agentic-access/x402-compute",
+  payment: "MPP tempo.charge",
 }, {
   id: "smol-orthogonal", available: false,
   reason: "Lifecycle API returned expired_key on 2026-09-13. No purchase until authenticated lifecycle operations work.",
@@ -40,7 +40,7 @@ export const profiles = {
 export function match(requirements) {
   return providers.map((provider) => {
     if (!provider.available) return { provider: provider.id, unmet: [provider.reason] };
-    if (!provider.capabilities) return { provider: provider.id, unmet: ["Select a compatible machine from machines with --provider x402-compute."] };
+    if (!provider.capabilities) return { provider: provider.id, unmet: ["Select a compatible machine from machines with --provider compute-mpp."] };
     const unmet = Object.entries(requirements).filter(([key, value]) => {
       const supplied = provider.capabilities[key];
       return supplied == null || (typeof value === "number" ? supplied < value : supplied !== value);
@@ -111,10 +111,10 @@ export async function machineOffers(options) {
   let quoteFailures = 0, changedBeyondCap = 0;
   for (const { machine, capabilities, estimate } of candidates.slice(0, shortlistSize)) {
     let offer;
-    try { offer = await quote("create", { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: 24, label: "fission-quote" }, "x402-compute"); }
+    try { offer = await quote("create", { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: 24, label: "fission-quote" }, "compute-mpp"); }
     catch { quoteFailures++; continue; }
     if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
-    offers.push({ provider: "x402-compute", machine: machine.id, region: options.region, capabilities,
+    offers.push({ provider: "compute-mpp", machine: machine.id, region: options.region, capabilities,
       creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
       quotedAt: new Date().toISOString(), leaseHours: 24 });
   }
@@ -133,7 +133,12 @@ export async function createPlan(name, options) {
   directory(name);
   const previous = await readJSON(join(directory(name), "state.json"));
   if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
-  options = { ...options };
+  options = { ...options, provider: providerId(options.provider) };
+  if (Object.hasOwn(sourceRecipes, options.recipe)) {
+    if (options.profile && options.profile !== options.recipe) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
+    if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");
+    options.profile = options.recipe;
+  }
   if (options.budget !== undefined) {
     if (options["max-spend"] !== undefined || options["total-spend"] !== undefined)
       throw new Error("Use --budget alone, or separate --max-spend and --total-spend caps.");
@@ -144,7 +149,7 @@ export async function createPlan(name, options) {
   let selection;
   if (options.cheapest) {
     if (options.budget === undefined) throw new Error("Use --cheapest with a whole-workspace --budget.");
-    if (options.machine || (options.provider && options.provider !== "x402-compute") || (options.kind && options.kind !== "vm"))
+    if (options.machine || (options.provider && options.provider !== "compute-mpp") || (options.kind && options.kind !== "vm"))
       throw new Error("--cheapest selects a compute VM; do not combine it with --machine or an incompatible provider/kind.");
     if (duration(options.duration) !== 86400) throw new Error("--cheapest requires an explicit --duration 24h.");
     const cap = await vmCeiling(options.profile || "runtime");
@@ -158,10 +163,10 @@ export async function createPlan(name, options) {
       average: discovery.average.amount, selectedQuote: selected.creationQuote, quotedAt: selected.quotedAt };
   }
   const provider = options.provider || "modal-tempo";
-  const { profile, requirements } = requirementsFor({ ...(provider === "x402-compute" ? { kind: "vm" } : {}), ...options });
-  if (!["modal-tempo", "x402-compute"].includes(provider)) throw new Error("Unknown provider.");
+  const { profile, requirements } = requirementsFor({ ...(provider === "compute-mpp" ? { kind: "vm" } : {}), ...options });
+  if (!["modal-tempo", "compute-mpp"].includes(provider)) throw new Error("Unknown provider.");
   let machine, capabilities;
-  if (provider === "x402-compute") {
+  if (provider === "compute-mpp") {
     machine = (await catalog()).find((item) => item.id === options.machine && item.provider === "vultr");
     if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a Vultr --machine and --region from the live compute catalog.");
     capabilities = machineCapabilities(machine);
@@ -170,7 +175,7 @@ export async function createPlan(name, options) {
     if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
     if (duration(options.duration) !== 86400) return { status: "unavailable", reason: "This provider requires a 24-hour prepaid lease. Select --duration 24h explicitly; early deletion does not imply a refund.", paymentSubmitted: false };
   } else {
-    if (options.machine || options.region) throw new Error("Machine and region require --provider x402-compute.");
+    if (options.machine || options.region) throw new Error("Machine and region require --provider compute-mpp.");
     const matches = match(requirements);
     if (!matches.some((item) => item.provider === provider && item.unmet.length === 0)) return { version: 1, status: "unavailable", name, profile, requirements, candidates: matches, paymentSubmitted: false };
   }
@@ -192,6 +197,7 @@ export async function createPlan(name, options) {
       throw new Error("Source requires a public GitHub --repo URL and exact 40-character --ref commit. Upload private work explicitly.");
     source = { url: options.repo, commit: options.ref };
   }
+  if (definition.afterCheckout?.length && !source) throw new Error("afterCheckout requires a public --repo and exact --ref commit.");
   let body = { timeout };
   if (machine) {
     await mkdir(directory(name), { recursive: true, mode: 0o700 });
@@ -224,7 +230,8 @@ export async function openPlan(name, id) {
   if (!value || value.name !== name) throw new Error("Saved plan does not match workspace name.");
   const { digest: expected, ...contents } = value;
   if (digest(contents) !== expected) throw new Error("Plan changed after creation. Generate a fresh plan.");
-  if (value.provider === "x402-compute") {
+  value.provider = providerId(value.provider);
+  if (value.provider === "compute-mpp") {
     const cap = await vmCeiling(value.profile);
     if (cap !== null && money(value.totalCap) > money(cap)) throw new Error("Saved allocation exceeds the current VM ceiling. Generate a lower-budget plan.");
     const current = (await catalog()).find((item) => item.id === value.body.plan && item.provider === "vultr");

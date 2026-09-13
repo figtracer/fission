@@ -29,7 +29,15 @@ export async function budget(limit, { vmMaxSpend, profile } = {}) {
     const existing = await readJSON(path);
     if (limit !== undefined) {
       if (units(limit) <= 0n) throw new Error("Budget must be positive.");
-      if (existing && units(existing.limit) !== units(limit)) throw new Error("An authorization already exists. Preserve it; this command cannot increase or reset it.");
+      if (existing && units(limit) > units(existing.limit)) throw new Error("An authorization already exists. Preserve it; this command cannot increase or reset it.");
+      if (existing && units(limit) < units(existing.limit)) {
+        const allocated = Object.values(existing.allocations).reduce((sum, item) => sum + units(item), 0n);
+        if (units(limit) < allocated) throw new Error("The new ceiling cannot be below existing workspace allocations.");
+        if (Object.values(existing.vmCaps || {}).some((cap) => units(cap) > units(limit)))
+          throw new Error("Lower the configured VM ceilings before lowering the aggregate ceiling below them.");
+        existing.limit = limit;
+        await writeJSON(path, existing);
+      }
       if (!existing) {
         if ((await list()).some((state) => !state.totalCap && !["terminated", "expired"].includes(state.phase)))
           throw new Error("Close existing creation-only workspaces before initializing an aggregate budget.");

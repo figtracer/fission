@@ -75,7 +75,7 @@ export async function connect(name, options = {}) {
   process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
   try {
     let state = await active(name);
-    if (state.provider !== "x402-compute") throw new Error("This provider has no SSH access. Use run/exec for its sandbox.");
+    if (state.provider !== "compute-mpp") throw new Error("This provider has no SSH access. Use run/exec for its sandbox.");
     await refresh(name, { signal });
     state = await active(name);
     signal.throwIfAborted();

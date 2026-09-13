@@ -3,7 +3,7 @@ import { readFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { directory, readJSON, writeJSON } from "./state.mjs";
+import { directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { units, reserve } from "./budget.mjs";
 
 const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
@@ -11,6 +11,7 @@ const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(home
 
 export const money = units;
 export const paymentTerms = { chainId: 4217, token: "0x20c000000000000000000000b9537d11c60e8b50", currency: "USDC.e" };
+const paymentOptions = ["--payment-intent", "charge", "--payment-token", paymentTerms.token, "--network", "tempo"];
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -40,8 +41,9 @@ export function runProcess(command, args, options = {}) {
 }
 
 export async function quote(operation, body, provider = "modal-tempo") {
-  const url = provider === "x402-compute" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
-  const result = await runProcess(tempo, ["request", "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url]);
+  provider = providerId(provider);
+  const url = provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
+  const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url]);
   if (result.code !== 0) throw new Error(`Quote unavailable: ${result.stderr.trim() || result.stdout.trim()}`);
   let offer;
   try { offer = JSON.parse(result.stdout); } catch { throw new Error("Provider returned an unreadable quote."); }
@@ -53,7 +55,8 @@ export async function quote(operation, body, provider = "modal-tempo") {
 }
 
 export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
-  if (state.provider === "x402-compute" && operation !== "create")
+  state = { ...state, provider: providerId(state.provider) };
+  if (state.provider === "compute-mpp" && operation !== "create")
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
@@ -65,8 +68,8 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   for (const path of [responsePath, metaPath]) {
     const file = await open(path, "wx", 0o600); await file.close();
   }
-  const url = state.provider === "x402-compute" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
-  const result = await runProcess(tempo, ["request", "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+  const url = state.provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
+  const result = await runProcess(tempo, ["request", ...paymentOptions, "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
   let response;
   try { response = JSON.parse(responseText); } catch { /* Preserve the raw response for recovery. */ }
@@ -76,7 +79,7 @@ export async function request(state, operation, body, maximum, id = randomUUID()
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}). Saved response: ${responsePath}. Do not repeat the payment.`);
   }
   if (response.error || response.detail) throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
-  if (state.provider === "x402-compute") {
+  if (state.provider === "compute-mpp") {
     const { adopt } = await import("./compute.mjs");
     return { sandbox_id: await adopt(state, response) };
   }
@@ -87,12 +90,12 @@ export async function recoverCreate(state) {
   const path = join(directory(state.name), "requests", `${state.createRequest}.response.json`);
   let response;
   try { response = await readJSON(path); } catch { return null; }
-  if (state.provider === "x402-compute" && response)
+  if (providerId(state.provider) === "compute-mpp" && response)
     return (await import("./compute.mjs")).adopt(state, response);
   return response && /^sb-[A-Za-z0-9]+$/.test(response.sandbox_id || "") ? response.sandbox_id : null;
 }
 
-export const validRemoteId = (state, id) => state.provider === "x402-compute"
+export const validRemoteId = (state, id) => providerId(state.provider) === "compute-mpp"
   ? /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id || "")
   : /^sb-[A-Za-z0-9]+$/.test(id || "");
 

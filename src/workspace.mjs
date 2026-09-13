@@ -2,7 +2,7 @@ import { readFile, open, rename, mkdir, unlink } from "node:fs/promises";
 import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
-import { directory, load, save, readJSON, locked } from "./state.mjs";
+import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
 import { quote, request, recoverCreate, execute, money, validRemoteId } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
@@ -10,16 +10,27 @@ import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 export const operationCap = "0.0001";
 const recipeDirectory = fileURLToPath(new URL("../recipes/", import.meta.url));
 export const terminal = (state) => ["terminated", "expired"].includes(state.phase);
+export const sourceRecipes = {
+  "foundry-source": ["forge", "cast", "anvil", "chisel"],
+  "reth-source": ["reth"],
+  "tempo-source": ["tempo"],
+};
 
 export async function recipe(input = "linux") {
   const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
-  const value = JSON.parse(await readFile(file, "utf8"));
+  const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
+  const value = binaries ? {
+    name: input, description: "Prepare Rust 1.95.0 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
+    afterCheckout: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare',*sys.argv[2:]],check=True)", await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8"), ...binaries]],
+    readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
+  } : JSON.parse(await readFile(file, "utf8"));
   if (typeof value.name !== "string" || !Array.isArray(value.prepare) || !Array.isArray(value.artifacts))
     throw new Error("Recipe requires name, prepare argv arrays, and artifact paths.");
-  if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts", "readiness"].includes(key)))
+  if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts", "readiness", "afterCheckout"].includes(key)))
     throw new Error("Unknown recipe field. Recipes cannot change payment or runtime settings.");
   if (value.readiness !== undefined && !Array.isArray(value.readiness)) throw new Error("Readiness must be argv arrays.");
-  for (const args of [...value.prepare, ...(value.readiness || [])])
+  if (value.afterCheckout !== undefined && !Array.isArray(value.afterCheckout)) throw new Error("afterCheckout must be argv arrays.");
+  for (const args of [...value.prepare, ...(value.afterCheckout || []), ...(value.readiness || [])])
     if (!Array.isArray(args) || !args.length || args.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Each preparation command must be an argv array.");
   const names = new Set();
@@ -45,6 +56,7 @@ export async function plan(name, options) {
   if (await readJSON(join(directory(name), "state.json")))
     throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");
   const definition = await recipe(options.recipe);
+  if (definition.afterCheckout?.length) throw new Error("Source recipes require a saved plan with --repo and --ref.");
   const timeout = duration(options.duration);
   const maximum = options["max-spend"];
   if (money(maximum) <= 0n) throw new Error("Set a positive --max-spend for creation.");
@@ -55,6 +67,7 @@ export async function plan(name, options) {
 }
 
 export async function start(name, prepared) {
+  prepared = { ...prepared, provider: providerId(prepared.provider) };
   return locked(name, async () => {
     const previous = await readJSON(join(directory(name), "state.json"));
     if (previous && previous.phase !== "not_submitted")
@@ -104,11 +117,12 @@ async function prepareState(state) {
   if (!state.asyncPreparation || !state.remoteId || !["preparing", "preparation_pending"].includes(state.phase))
     throw new Error("This workspace is not awaiting preparation.");
   if (state.bootstrapJob) throw new Error("Bootstrap already recorded. Observe its existing job; do not launch it again.");
-  if (state.provider === "x402-compute") await (await import("./compute.mjs")).prepareAccess(state);
+  if (state.provider === "compute-mpp") await (await import("./compute.mjs")).prepareAccess(state);
   const { launch } = await import("./jobs.mjs");
   const commands = [...state.recipe.prepare];
   if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
   if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
+  commands.push(...(state.recipe.afterCheckout || []));
   // The job identity is persisted before launch. An ambiguous result is observed,
   // never automatically replayed or mistaken for failed preparation.
   state.bootstrapJob = "bootstrap";

@@ -9,6 +9,9 @@ const legacyRoot = join(homedir(), ".local/state/loaner");
 export const root = resolve(process.env.FISSION_HOME || process.env.LOANER_HOME ||
   (existsSync(legacyRoot) ? legacyRoot : join(homedir(), ".local/state/fission")));
 
+// Read old records without rewriting their plan digest or financial history.
+export const providerId = (value) => value === "x402-compute" ? "compute-mpp" : value;
+
 export function directory(name) {
   if (!/^[a-z][a-z0-9-]{0,47}$/.test(name || ""))
     throw new Error("Name must begin with a lowercase letter and contain at most 48 letters, digits or hyphens.");
@@ -36,7 +39,7 @@ export async function readJSON(path) {
 export async function load(name) {
   const state = await readJSON(join(directory(name), "state.json"));
   if (!state) throw new Error(`No saved workspace named ${name}.`);
-  return state;
+  return { ...state, provider: providerId(state.provider) };
 }
 
 export const save = (state) => writeJSON(join(directory(state.name), "state.json"), state);
@@ -48,7 +51,7 @@ export async function list() {
   for (const entry of names) {
     if (!entry.isDirectory() || !/^[a-z][a-z0-9-]{0,47}$/.test(entry.name)) continue;
     const state = await readJSON(join(root, entry.name, "state.json"));
-    if (state) states.push(state);
+    if (state) states.push({ ...state, provider: providerId(state.provider) });
   }
   return states;
 }

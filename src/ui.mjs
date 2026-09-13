@@ -178,7 +178,7 @@ export async function ui() {
       catch (error) { view.message = error.message; }
       finally { settled(); }
     } else if (key.name === "p" && view.detail && selected && !finished(selected)) {
-      busy = true; view.message = `Checking ${selected.name} (at most ${selected.provider === "x402-compute" ? "0" : operationCap} USDC.e)…`; paint();
+      busy = true; view.message = `Checking ${selected.name} (at most ${selected.provider === "compute-mpp" ? "0" : operationCap} USDC.e)…`; paint();
       controller = new AbortController();
       try { await refresh(selected.name, { signal: controller.signal }); view.message = "Provider status updated."; }
       catch (error) { view.message = error.message; }
@@ -186,7 +186,7 @@ export async function ui() {
     } else if (key.name === "x" && view.detail && selected && !finished(selected)) view.confirm = selected.name;
     else if (key.name === "return" && selected) {
       if (!view.detail) { view.detail = true; view.offset = 0; }
-      else if (selected.provider !== "x402-compute" || selected.phase !== "ready") view.message = finished(selected) ? "This machine is closed." : "SSH is available on ready full VMs; use run/exec for sandboxes.";
+      else if (selected.provider !== "compute-mpp" || selected.phase !== "ready") view.message = finished(selected) ? "This machine is closed." : "SSH is available on ready full VMs; use run/exec for sandboxes.";
       else {
         controller = new AbortController();
         busy = true; paused = true; leave();

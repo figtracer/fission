@@ -25,9 +25,11 @@ const help = `fission — temporary workspaces paid with Tempo
     reth-synced|tempo-source|tempo-node]
     [--os linux --arch x86_64 --kind sandbox|vm --cpu N --memory GiB --disk GiB]
     [--repo https://github.com/OWNER/REPO --ref FULL_COMMIT]
-    [--provider x402-compute --machine PLAN --region REGION --duration 24h]
+    [--provider compute-mpp --machine PLAN --region REGION --duration 24h]
     Use --budget AMOUNT instead of both spending caps. Add --cheapest --region
     REGION --duration 24h to select the cheapest compatible quoted VM.
+    Source recipes: foundry-source, reth-source, tempo-source require --repo/--ref
+    and prepare /workspace/build for a separate bounded build job.
   open NAME --plan ID --approve
   prepare NAME
   run NAME JOB --duration 10m -- COMMAND [ARG...]
@@ -155,7 +157,8 @@ async function main() {
       break;
     }
     case "recipes":
-      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" }]);
+      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
+        ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.95.0 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
       break;
     case "open": {
       if (values.plan) {
