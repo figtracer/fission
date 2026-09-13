@@ -1,0 +1,14 @@
+{
+  "name": "reth",
+  "description": "Reth 2.5.2 with a private local development chain and RPC accessible inside the workspace. Includes the pinned executable, not a Rust source-build environment.",
+  "prepare": [
+    [
+      "python3",
+      "-c",
+      "import hashlib, io, json, pathlib, platform, subprocess, tarfile, time, urllib.request\nroot = pathlib.Path('/workspace')\nroot.mkdir(exist_ok=True)\nassert platform.machine() == 'x86_64', 'This recipe requires x86_64 Linux'\nurl = 'https://github.com/paradigmxyz/reth/releases/download/v2.5.2/reth-v2.5.2-x86_64-unknown-linux-gnu.tar.gz'\ndata = urllib.request.urlopen(url, timeout=90).read()\nassert hashlib.sha256(data).hexdigest() == 'e360895ac51b351ff0c44573f0f619bb1e7c3ff2df55502af1190c14c9b5ef6d', 'Reth archive digest mismatch'\nwith tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:\n    members = [member for member in archive.getmembers() if pathlib.PurePosixPath(member.name).name == 'reth' and member.isfile()]\n    assert len(members) == 1, 'Expected one Reth executable'\n    binary = root / 'reth'\n    binary.write_bytes(archive.extractfile(members[0]).read())\n    binary.chmod(0o700)\nsubprocess.run([str(binary), '--version'], check=True)\nlog = (root / 'reth.log').open('ab')\nprocess = subprocess.Popen([str(binary), 'node', '--dev', '--http', '--http.addr', '127.0.0.1', '--datadir', str(root / 'chain')], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)\n(root / 'reth.pid').write_text(str(process.pid))\nfor attempt in range(30):\n    if process.poll() is not None:\n        raise RuntimeError((root / 'reth.log').read_text()[-2000:])\n    try:\n        request = urllib.request.Request('http://127.0.0.1:8545', data=json.dumps({'jsonrpc':'2.0','id':1,'method':'eth_chainId','params':[]}).encode(), headers={'Content-Type':'application/json'})\n        response = json.load(urllib.request.urlopen(request, timeout=1))\n        assert response.get('result'), response\n        print(json.dumps({'reth':'2.5.2','rpc':'http://127.0.0.1:8545','chainId':response['result']}))\n        break\n    except Exception:\n        time.sleep(1)\nelse:\n    raise RuntimeError('Reth RPC did not become ready; inspect /workspace/reth.log')\n"
+    ]
+  ],
+  "artifacts": [
+    "/workspace/reth.log"
+  ]
+}

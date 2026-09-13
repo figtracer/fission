@@ -1,0 +1,9 @@
+{
+  "name": "loaner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Temporary workspaces for occasional agent tasks, paid with Tempo.",
+  "type": "module",
+  "bin": { "loaner": "src/cli.mjs" },
+  "engines": { "node": ">=22.13.0" }
+}

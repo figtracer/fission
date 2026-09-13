@@ -1,0 +1,6 @@
+{
+  "name": "linux",
+  "description": "A temporary Linux shell with Python and an empty workspace.",
+  "prepare": [["sh", "-c", "mkdir -p /workspace && python3 --version && uname -s"]],
+  "artifacts": []
+}
