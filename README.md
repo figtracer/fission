@@ -2,87 +2,47 @@
 
 temporary workspaces for the few hours you need another machine.
 
-Loaner opens a paid Linux workspace, prepares it for your task, and keeps its remaining time visible in your terminal. Your existing agent runs commands and brings files back. Close it when the work is done; the provider's deadline remains in force if your computer goes offline.
+Loaner rents a Linux sandbox through [Tempo](https://tempo.xyz/) and [Modal](https://modal.mpp.tempo.xyz), prepares it from a recipe, and tracks its lifetime in your terminal. Your existing agent runs commands, transfers files, and closes it when the task is done. The provider enforces expiry even if your computer goes offline.
 
-The first provider is [Modal through Tempo](https://modal.mpp.tempo.xyz). It supplies an isolated Linux **sandbox**, not an unrestricted VM. Loaner adds recipes, saved session state, file transfer and a terminal view. Payments use your existing Tempo CLI wallet. There is no Loaner payment endpoint or background daemon.
+One CLI, two recipes, no background service or separate payment endpoint.
 
-## Start
+## Use
 
-Use Node >=22.13 and an already configured [Tempo CLI](https://tempo.xyz/).
+Requires Node >=22.13 and a configured Tempo CLI wallet.
 
 ```sh
 git clone https://github.com/figtracer/loaner.git
 cd loaner
 npm link --ignore-scripts
 
-loaner recipes
+# Preview; add --approve to purchase.
 loaner open node-work --recipe reth --duration 2h --max-spend 1
-```
-
-The last command previews the price, recipe commands and duration. Add `--approve` to purchase:
-
-```sh
 loaner open node-work --recipe reth --duration 2h --max-spend 1 --approve
-loaner list
+
 loaner watch
 loaner exec node-work -- /workspace/reth --version
-```
-
-The `reth` recipe downloads the official Reth 2.5.2 executable, verifies its SHA-256, starts a local development chain, and waits for its RPC. RPC is available inside the workspace at `http://127.0.0.1:8545`. It does not sync mainnet or install a Rust source-build toolchain. The `linux` recipe creates an empty `/workspace` with the provider's Python runtime.
-
-## Bring work in and out
-
-```sh
 loaner upload node-work ./task.py /workspace/task.py
 loaner exec node-work -- python3 /workspace/task.py
 loaner download node-work /workspace/result.json ./result.json
 loaner close node-work --output ./saved-node-work
 ```
 
-Transfers operate on individual files and verify SHA-256. Upload and download destinations must be new. Archive a project yourself before uploading it; only the files you explicitly select leave your computer. Uploads use 4 KiB chunks to fit the payment gateway; downloads use 48 KiB chunks. This interface is intended for modest source and output files, not large chain databases.
+`close --output` saves the recipe’s declared files before termination; Reth declares only `/workspace/reth.log`. Download other outputs explicitly. If export fails, the workspace remains open until its original expiry. Use `--discard-output` to close without saving. Unsaved files disappear on expiry; closing your terminal or PR does not close the workspace.
 
-`close --output` collects the recipe's declared files into a new directory before requesting termination. The Reth recipe declares `/workspace/reth.log`. Download other outputs explicitly. Stop processes writing an artifact before exporting it. If export fails, Loaner keeps the session and reports the partial output path; its original expiry still applies.
+## Available now
 
-To finish without saving declared files:
+- **linux:** an empty `/workspace`, shell and Python.
+- **reth:** checksum-verified Reth 2.5.2 executable and a local development chain, with RPC inside the sandbox at `127.0.0.1:8545`. No mainnet sync or Rust build toolchain.
+- **Custom recipes:** pass a JSON file to `--recipe`, containing `name`, `prepare` (command-argument arrays), and `artifacts` (absolute remote file paths).
 
-```sh
-loaner close node-work --discard-output
-```
+These are sandboxes: no verified SSH, public ports, custom images, capacity selection or duration extensions. Transfers support individual modest files, verify SHA-256, and require new destinations.
 
-Provider expiry can destroy unsaved files. An offline laptop cannot export them. Neither a closed terminal nor a closed PR is a completion signal; your agent should call `close` when you consider the task finished.
+## Lifetime and cost
 
-## Track sessions
+`list`, `status NAME` and `watch` show free, cached observations with estimated deadlines. `status NAME --refresh` checks the provider; `watch --refresh --max-spend 0.01` checks every 30 seconds within that total cap. `list` and `status` support `--json` for agents.
 
-`list`, `status NAME` and `watch` read local observations and cost nothing. The table shows elapsed time, estimated time left and the age of the last provider observation. The gateway does not return an authoritative creation timestamp, so passing the displayed deadline means expiry needs confirmation.
+`open --max-spend` caps creation only, including preparation time. Subsequent command, status and termination requests each have a 0.0001 USDC.e cap; transfers make multiple requests. Network fees are separate. Early closure does not guarantee a refund.
 
-```sh
-loaner status node-work --refresh --json
-loaner watch --refresh --max-spend 0.01
-```
+State is saved in `~/.local/state/loaner` (`LOANER_HOME` overrides it). After an interrupted request, preserve it and use `reconcile NAME`; purchases are never automatically retried. A lost creation response without a recoverable ID needs provider/payment investigation.
 
-Refreshing costs at most 0.0001 USDC.e per workspace per call. Watch refreshes every 30 seconds within its explicit total cap. Its countdown redraws locally. Ctrl-C exits the view; it does not close workspaces. Agent-facing state is available with `--json`.
-
-## Costs and recovery
-
-`open --max-spend` caps the creation payment. Creation buys a bounded duration, including preparation. Subsequent command, status and termination requests each have a 0.0001 USDC.e cap. File transfers make multiple requests. These are gateway charges; network fees are separate. Loaner adds no fee. Early termination is not a promise of a refund.
-
-State lives in `~/.local/state/loaner` with private file permissions. Set `LOANER_HOME` to choose another directory and `LOANER_TEMPO` to select the installed Tempo executable. Preserve state and receipts.
-
-```sh
-loaner reconcile node-work
-```
-
-Reconciliation recovers a remote ID from a saved creation response and observes the provider. It never repeats a purchase or preparation command. A lost response with no recoverable ID requires provider/payment investigation; Loaner keeps the unresolved record and refuses to reuse its name. It does not promise provider-wide discovery. After an interrupted operation, inspect the lock's PID; remove only a stale lock once its process has exited.
-
-The current gateway exposes no verified extension, custom-image, capacity-selection, SSH or public-port interface. Choose the duration at creation. Full-kernel workloads and large builds need a different provider.
-
-## Recipes
-
-A local JSON file defines `name`, optional `description`, `prepare` (arrays of command arguments), and `artifacts` (absolute remote file paths). Pass its path to `--recipe`. Preparation runs remotely and is displayed before approval. A recipe cannot select a payment endpoint, increase runtime or receive your wallet credentials. Failed preparation triggers a termination attempt and preserves diagnostics in local request state.
-
-## References
-
-- [Glue](https://github.com/figtracer/glue): small CLI services, agent-readable state and explicit lifecycle controls.
-- [Reth](https://github.com/paradigmxyz/reth): the pinned node used by the first prepared recipe.
-- [Modal sandbox lifecycle](https://modal.com/docs/guide/sandbox-lifecycle): the underlying workspace model.
-- [Kurtosis Ethereum package](https://github.com/ethpandaops/ethereum-package): a reference for future recipes requiring a complete private network.
+Inspired by [Glue](https://github.com/figtracer/glue), using [Reth](https://github.com/paradigmxyz/reth) and [Modal’s sandbox lifecycle](https://modal.com/docs/guide/sandbox-lifecycle). [Kurtosis](https://github.com/ethpandaops/ethereum-package) is a reference for future network recipes.

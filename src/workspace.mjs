@@ -142,8 +142,7 @@ export async function active(name) {
   const state = await load(name);
   if (!state.remoteId || terminal(state) || ["termination_unknown", "closing"].includes(state.phase))
     throw new Error(`Workspace is ${state.phase}; inspect status before executing work.`);
-  if (Date.now() >= Date.parse(state.deadlineEstimate))
-    throw new Error("Estimated deadline has passed. Inspect status; the workspace may already be gone.");
+  // The local deadline is informational; only the provider knows actual expiry.
   return state;
 }
 
@@ -183,7 +182,7 @@ export async function download(state, remote, local) {
       if (expected.sha256 !== part.sha256 || expected.size !== part.size) throw new Error("File changed during export. Quiesce the writer and try a new output path.");
       const bytes = Buffer.from(part.data, "base64");
       if (bytes.length !== Math.min(49152, expected.size - offset)) throw new Error("Incomplete file chunk.");
-      await target.write(bytes);
+      await target.writeFile(bytes);
       hash.update(bytes);
       offset += bytes.length;
     } while (offset < expected.size);
@@ -206,7 +205,7 @@ export async function close(name, options) {
     }
     if (!options["discard-output"] && state.recipe.artifacts.length && !options.output)
       throw new Error("Choose --output DIR to save declared files, or --discard-output to delete without saving.");
-    if (options.output && !state.exportedTo) {
+    if (options.output) {
       const output = resolve(options.output);
       const staging = `${output}.partial-${randomUUID()}`;
       await mkdir(staging, { recursive: false, mode: 0o700 });

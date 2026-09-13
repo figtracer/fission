@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-import { list, load } from "./state.mjs";
+import { list, load, locked } from "./state.mjs";
 import { execute, money } from "./provider.mjs";
 import { plan, start, refresh, reconcile, active, upload, download, close, operationCap } from "./workspace.mjs";
 
@@ -72,6 +72,8 @@ async function main() {
   } });
   const [command, name, first, second] = positionals;
   if (!command || values.help) { console.log(help); return; }
+  if (values["max-spend"] !== undefined && !["open", "watch"].includes(command))
+    throw new Error("--max-spend is supported only by open and watch; no request submitted.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
     case "recipes":
@@ -95,7 +97,7 @@ async function main() {
     }
     case "reconcile": emit(summary(await reconcile(name))); break;
     case "exec": {
-      const result = await execute(await active(name), tail, operationCap);
+      const result = await locked(name, async () => execute(await active(name), tail, operationCap));
       if (values.json) emit(result);
       else { process.stdout.write(result.stdout); process.stderr.write(result.stderr); }
       process.exitCode = result.returncode === 0 ? 0 : 1;
@@ -103,10 +105,10 @@ async function main() {
     }
     case "upload":
       if (!first || !second) throw new Error("Supply local and remote file paths.");
-      emit(await upload(await active(name), first, second)); break;
+      emit(await locked(name, async () => upload(await active(name), first, second))); break;
     case "download":
       if (!first || !second) throw new Error("Supply remote and local file paths.");
-      emit(await download(await active(name), first, second)); break;
+      emit(await locked(name, async () => download(await active(name), first, second))); break;
     case "close":
       if (values.output && values["discard-output"]) throw new Error("Choose --output or --discard-output, not both.");
       emit(summary(await close(name, values))); break;
