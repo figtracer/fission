@@ -4,7 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { directory, locked, load, save, readJSON, writeJSON } from "./state.mjs";
 import { execute, money } from "./provider.mjs";
-import { active, operationCap } from "./workspace.mjs";
+import { active, operationCap, terminal } from "./workspace.mjs";
 
 const runner = new URL("../harness/job.py", import.meta.url);
 const jobPath = (name, id) => {
@@ -61,14 +61,15 @@ export async function getJob(name, id, refresh = false, options = {}) {
     if (!job) throw new Error("Unknown job.");
     if (!refresh) return job;
     const state = await load(name);
+    const updatesPreparation = id === state.bootstrapJob && !terminal(state) && !["termination_unknown", "closing"].includes(state.phase);
     if (jobDone(job)) {
-      if (id === state.bootstrapJob && !["terminated", "termination_unknown"].includes(state.phase)) {
+      if (updatesPreparation) {
         state.phase = job.phase === "succeeded" ? "ready" : "prepare_failed";
         await save(state);
       }
       return job;
     }
-    if (["terminated", "expired"].includes(state.phase)) {
+    if (terminal(state)) {
       job.phase = "workspace_terminated";
       await writeJSON(file, job);
       return job;
@@ -81,7 +82,7 @@ export async function getJob(name, id, refresh = false, options = {}) {
     job.observation = observation;
     job.observedAt = new Date().toISOString();
     await writeJSON(file, job);
-    if (id === state.bootstrapJob && !["terminated", "termination_unknown"].includes(state.phase)) {
+    if (updatesPreparation) {
       state.phase = job.phase === "succeeded" ? "ready" : jobDone(job) ? "prepare_failed" : "preparing";
       if (state.phase === "ready") state.readyAt ??= job.observedAt;
       await save(state);
