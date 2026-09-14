@@ -101,7 +101,7 @@ Choose an existing directory on the local disk, an attached drive, or storage yo
 fission storage --storage-dir /Volumes/Data/fission --max-bytes 1200000000000
 ```
 
-Pass `--storage-dir` to cache and dataset collection commands, or set `FISSION_STORAGE_DIR` for subsequent commands and the TUI. The TUI's **Storage** button (`o`) shows the selected path and available space. The default is `FISSION_HOME/.cache`. Choosing a different directory moves no existing files and opens no paid storage account.
+Pass `--storage-dir` to cache and dataset collection commands, or set `FISSION_STORAGE_DIR` for subsequent commands and the TUI. The TUI's **Storage** button (`o`) shows the selected path and available space. The default is `FISSION_HOME/.cache`. Choosing a different directory moves no existing files and opens no paid storage account. Fission charges no storage fee; a user-mounted service retains its own billing.
 
 For a completed Reth full import, preserve the execution database under your custody:
 

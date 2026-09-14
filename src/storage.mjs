@@ -22,6 +22,6 @@ export async function storage(path, required = 0) {
   const info = await statfs(existing);
   const availableBytes = info.bavail * info.bsize;
   return { mode: "local", directory, availableBytes, requiredBytes: required, fits: required <= availableBytes,
-    recurringStorageCharge: "0", custody: "Files remain in your chosen directory after rental cleanup.",
+    fissionStorageCharge: "0", custody: "Files remain in your chosen directory after rental cleanup.",
     configure: "Use --storage-dir PATH or set FISSION_STORAGE_DIR. External drives and user-mounted storage work as local paths." };
 }

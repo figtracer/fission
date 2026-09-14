@@ -620,7 +620,7 @@ fn render(
         let status = if !view.message.is_empty() {
             view.message.clone()
         } else if view.storage {
-            "Your disk. No recurring provider storage charge.".into()
+            "Directory storage, managed by you.".into()
         } else if view.available {
             data.available.as_ref().map_or_else(String::new, |c| {
                 format!(

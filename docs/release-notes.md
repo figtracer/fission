@@ -1,3 +1,5 @@
+Storage output names Fission's own storage fee explicitly (`fissionStorageCharge`, replacing `recurringStorageCharge`). User-mounted storage retains its own billing.
+
 Mouse and keyboard tab navigation now leaves the Storage and Help views consistently.
 
 The selected local storage directory now reaches managed tmux sessions even when a tmux server is already running.
