@@ -32,7 +32,7 @@ export async function recipe(input = "linux") {
     const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
     const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
     value = binaries ? {
-      name: input, description: "Prepare Rust 1.95.0 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
+      name: input, description: "Prepare Rust 1.96.1 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
       afterCheckout: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare',*sys.argv[2:]],check=True)", await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8"), ...binaries]],
       readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
     } : JSON.parse(await readFile(file, "utf8"));

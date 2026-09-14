@@ -10,6 +10,9 @@ import sys
 import tempfile
 import urllib.request
 
+# Foundry's locked Solar and vergen dependencies require Rust 1.96.
+TOOLCHAIN = '1.96.1'
+
 
 def main():
     root = pathlib.Path('/workspace')
@@ -28,7 +31,7 @@ def main():
     commit = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
     cargo_home = root / '.cargo'
     env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'CARGO_HOME': str(cargo_home),
-           'RUSTUP_HOME': str(root / '.rustup'), 'RUSTUP_TOOLCHAIN': '1.95.0',
+           'RUSTUP_HOME': str(root / '.rustup'), 'RUSTUP_TOOLCHAIN': TOOLCHAIN,
            'CARGO_TARGET_DIR': str(source / 'target'), 'PATH': f'{cargo_home}/bin:' + os.environ['PATH']}
     if mode == 'build':
         command = [str(cargo_home / 'bin' / 'cargo'), 'build', '--locked', '--release']
@@ -52,7 +55,7 @@ def main():
             with destination.open('rb') as file:
                 checksum = hashlib.file_digest(file, 'sha256').hexdigest()
             outputs.append({'path': str(destination), 'sha256': checksum, 'version': version})
-        report = {'source': str(source), 'commit': commit, 'toolchain': '1.95.0', 'profile': 'release', 'binaries': outputs,
+        report = {'source': str(source), 'commit': commit, 'toolchain': TOOLCHAIN, 'profile': 'release', 'binaries': outputs,
                   'changes': subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True)}
         (root / 'build.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report), flush=True)
@@ -70,17 +73,17 @@ def main():
     installer.write_bytes(data)
     installer.chmod(0o700)
     subprocess.run([str(installer), '-y', '--no-modify-path', '--profile', 'minimal',
-                    '--default-toolchain', '1.95.0'], env=env, check=True)
+                    '--default-toolchain', TOOLCHAIN], env=env, check=True)
     installer.unlink()
     # Subsequent agent jobs can use absolute paths without shell activation.
     for name in ['cargo', 'rustc', 'rustup']:
         wrapper = root / name
-        wrapper.write_text('#!/bin/sh\nexport CARGO_HOME=/workspace/.cargo RUSTUP_HOME=/workspace/.rustup RUSTUP_TOOLCHAIN=1.95.0\nexport PATH="/workspace/.cargo/bin:$PATH"\nexec /workspace/.cargo/bin/' + name + ' "$@"\n')
+        wrapper.write_text(f'#!/bin/sh\nexport CARGO_HOME=/workspace/.cargo RUSTUP_HOME=/workspace/.rustup RUSTUP_TOOLCHAIN={TOOLCHAIN}\nexport PATH="/workspace/.cargo/bin:$PATH"\nexec /workspace/.cargo/bin/' + name + ' "$@"\n')
         wrapper.chmod(0o700)
     build = root / 'build'
     build.write_text('#!/bin/sh\ncd /workspace/source || exit\nexec python3 /workspace/.fission/rust-source.py build ' + ' '.join(binaries) + '\n')
     build.chmod(0o700)
-    report = {'commit': commit, 'toolchain': '1.95.0', 'build': ['/workspace/build'], 'binaries': binaries, 'compiled': False}
+    report = {'commit': commit, 'toolchain': TOOLCHAIN, 'build': ['/workspace/build'], 'binaries': binaries, 'compiled': False}
     (root / 'source.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report), flush=True)
 

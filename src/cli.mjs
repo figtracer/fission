@@ -159,7 +159,7 @@ async function main() {
     }
     case "recipes":
       emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for separate full mainnet snapshot import and sync jobs; live synced deployment unverified", profile: "reth-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
-        ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.95.0 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
+        ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
       break;
     case "open": {
       if (values.plan) {
