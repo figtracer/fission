@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { directory, locked, load, save, readJSON, writeJSON } from "./state.mjs";
+import { directory, locked, load, save, readJSON, writeJSON, OperationLocked } from "./state.mjs";
 import { execute, money } from "./provider.mjs";
 import { active, operationCap, terminal } from "./workspace.mjs";
 
@@ -105,9 +105,15 @@ export async function waitJob(name, id, seconds, maximum) {
       const cached = await getJob(name, id);
       if (jobDone(cached)) return cached;
       if (remaining < money(operationCap)) return { ...cached, waitingStopped: "observation_budget_exhausted" };
-      remaining -= money(operationCap);
-      const job = await getJob(name, id, true, { deadline: until, signal: controller.signal });
-      if (jobDone(job)) return job;
+      try {
+        const job = await getJob(name, id, true, { deadline: until, signal: controller.signal });
+        remaining -= money(operationCap);
+        if (jobDone(job)) return job;
+      } catch (error) {
+        // Contention happens before observation starts. Keep the same deadline
+        // and budget, and never remove another operation's lock.
+        if (!(error instanceof OperationLocked) || error.path !== join(directory(name), "operation.lock")) throw error;
+      }
       await delay(Math.min(15000, Math.max(0, until - Date.now())), undefined, { signal: controller.signal });
     }
   } catch (error) { if (error.name !== "AbortError" && !controller.signal.aborted && Date.now() < until) throw error; }

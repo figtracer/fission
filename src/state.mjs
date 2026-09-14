@@ -59,6 +59,13 @@ export async function list() {
 
 export const locked = (name, action) => fileLocked(join(directory(name), "operation.lock"), action);
 
+export class OperationLocked extends Error {
+  constructor(path) {
+    super(`Operation lock exists: ${path}. Check its PID; after that process exits, remove only the lock and run reconcile. Keep all other state.`);
+    this.path = path;
+  }
+}
+
 export async function fileLocked(path, action, waitMs = 0) {
   const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -69,7 +76,7 @@ export async function fileLocked(path, action, waitMs = 0) {
     catch (error) {
       if (error.code !== "EEXIST") throw error;
       if (Date.now() >= deadline)
-        throw new Error(`Operation lock exists: ${path}. Check its PID; after that process exits, remove only the lock and run reconcile. Keep all other state.`);
+        throw new OperationLocked(path);
       await delay(Math.min(25, deadline - Date.now()));
     }
   }
