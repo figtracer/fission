@@ -65,6 +65,7 @@ async function main() {
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
+    "raise-to": { type: "string" }, approval: { type: "string" },
     "storage-dir": { type: "string" },
     "max-bytes": { type: "string" },
     scope: { type: "string" }, "max-head-age": { type: "string" },
@@ -81,7 +82,7 @@ async function main() {
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
   const allowed = {
-    skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
     prepare: ["duration"], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
@@ -117,9 +118,9 @@ async function main() {
     }
     case "capabilities": emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" } }); break;
     case "budget":
-      if ((values["total-spend"] !== undefined || values["vm-max-spend"] !== undefined) && !values.approve) throw new Error("Use --approve to record an authorized budget or VM ceiling.");
+      if (["total-spend", "vm-max-spend", "raise-to"].some((key) => values[key] !== undefined) && !values.approve) throw new Error("Use --approve to record an authorized budget or VM ceiling.");
       if (values.profile && (!profiles[values.profile] || values["vm-max-spend"] === undefined)) throw new Error("Use a known --profile with --vm-max-spend.");
-      emit(await budget(values["total-spend"], { vmMaxSpend: values["vm-max-spend"], profile: values.profile })); break;
+      emit(await budget(values["total-spend"], { vmMaxSpend: values["vm-max-spend"], profile: values.profile, raiseTo: values["raise-to"], approval: values.approval })); break;
     case "plan": {
       const value = await createPlan(name, values); emit(value);
       if (value.status === "unavailable") process.exitCode = 2;

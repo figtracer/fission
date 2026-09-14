@@ -4,7 +4,9 @@ Use this guide when renting compute or recovering an existing workspace. Amounts
 
 ## Quote and open
 
-Inspect `fission budget` and `fission list --json`. For initial setup, record the agreed aggregate gateway budget with `fission budget --total-spend AMOUNT --approve` and a VM ceiling with `fission budget --vm-max-spend AMOUNT --approve`. Leave network-fee room within the user's overall authorization. Reuse the existing ledger; its aggregate ceiling can only be lowered while still covering retained allocations and configured ceilings.
+Inspect `fission budget` and `fission list --json`. For initial setup, record the agreed aggregate gateway budget with `fission budget --total-spend AMOUNT --approve` and a VM ceiling with `fission budget --vm-max-spend AMOUNT --approve`. Leave network-fee room within the user's overall authorization. Reuse the existing ledger; `--total-spend` can only lower an existing ceiling while still covering retained allocations and configured ceilings.
+
+Only after the user grants additional authorization, record the new aggregate ceiling with `fission budget --raise-to AMOUNT --approval "USER APPROVAL AND CONTEXT" --approve`. This separate operation appends a dated amendment and a hash of retained allocations, requests, and VM ceilings; it never clears history or releases ambiguous allocations. The CLI records authorization rather than authenticating it. Wallet balance, a closed machine, and failed requests are not new permission to spend. Preserve fee room and keep each new rental below its own cap.
 
 For an ordinary Foundry VM:
 

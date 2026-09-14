@@ -72,14 +72,17 @@ Example: fission machines --profile reth-source --region ams --duration 2h`,
 Usage: fission budget
        fission budget --total-spend AMOUNT --approve
        fission budget --vm-max-spend AMOUNT [--profile PROFILE] --approve
+       fission budget --raise-to AMOUNT --approval TEXT --approve
 
 --total-spend initializes or lowers the aggregate authorization; it cannot
 increase or reset an existing ledger. --vm-max-spend sets the VM ceiling.
 Initialize the ledger first; open legacy creation-only workspaces block setup.
 Without --profile the VM ceiling applies to all profiles; a profile cap can
 only narrow it. Both ceiling options may be recorded in the same invocation.
-These are not receipts or new spending permission. Closed allocations and
-unresolved requests remain retained. Returns JSON. See fission help rental.`,
+--raise-to separately records a newly authorized higher aggregate limit with
+the user's approval text. It appends an amendment without clearing allocations,
+requests, or VM ceilings. It does not infer authorization from wallet balance.
+Returns JSON including authorizationAmendments. See fission help rental.`,
   spending: `Show recorded payment outflow and unresolved receipts as JSON.
 
 Usage: fission spending [--refresh]
