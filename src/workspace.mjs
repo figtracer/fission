@@ -133,7 +133,12 @@ async function prepareState(state) {
   if (!state.asyncPreparation || !state.remoteId || !["preparing", "preparation_pending"].includes(state.phase))
     throw new Error("This workspace is not awaiting preparation.");
   if (state.bootstrapJob) throw new Error("Bootstrap already recorded. Observe its existing job; do not launch it again.");
-  if (state.provider === "compute-mpp") await (await import("./compute.mjs")).prepareAccess(state);
+  if (state.provider === "compute-mpp") {
+    const compute = await import("./compute.mjs");
+    if (state.lease) {
+      if (!await compute.prepareLease(state)) return state;
+    } else await compute.prepareAccess(state);
+  }
   const { launch } = await import("./jobs.mjs");
   const commands = [...state.recipe.prepare];
   if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);

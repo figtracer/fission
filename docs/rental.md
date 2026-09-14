@@ -17,9 +17,19 @@ Choose the recipe/profile for the task. Planning pays nothing and returns execut
 
 `--budget` is the whole-workspace gateway allocation. It replaces `--max-spend` and `--total-spend`; creation is capped at the final quote. The 0.0003 lifecycle accounting floor is not an estimate of future usage. Allow room for observations, commands, exports, and shutdown. Allocations remain retained after close; failed requests retain their reserved caps. Two operation caps are protected for termination/status.
 
-`--cheapest` requires budget mode, an explicit region and 24-hour duration. It selects the lowest successful quote among up to three compatible catalog candidates under the ceiling. A chosen machine and `--cheapest` are mutually exclusive. For manual selection, use `fission machines --profile PROFILE --region ams --duration 24h`, then pass the returned provider, machine, and region to `plan`. Profile ceilings and discovery caps only narrow the global VM ceiling. Empty offers preserve requirements and budget.
+`--cheapest` requires budget mode, an explicit region and duration. It selects the lowest successful quote among up to three compatible catalog candidates under the ceiling. A chosen machine and `--cheapest` are mutually exclusive. For manual selection, use `fission machines --profile PROFILE --region ams --duration 24h`, then pass the returned provider, machine, and region to `plan`. Profile ceilings and discovery caps only narrow the global VM ceiling. Empty offers preserve requirements and budget.
 
-Discovery reads all four compute catalog categories and fails on incomplete retrieval. Quote statistics describe one provider's capped shortlist. Capacity uses vCPUs and GiB, with decimal disk GB converted conservatively. The compute backend provisions Vultr Ubuntu 24.04 x86 VMs with private per-workspace SSH and management credentials. The supported planner uses prepaid 24-hour rentals; early close carries no refund guarantee.
+Discovery reads all four compute catalog categories and fails on incomplete retrieval. Quote statistics describe one provider's capped shortlist. Capacity uses vCPUs and GiB, with decimal disk GB converted conservatively. The compute backend provisions Vultr Ubuntu 24.04 x86 VMs with private per-workspace SSH and management credentials. A 24-hour request rents the target directly; shorter requests use the credit conversion below. Early close carries no refund guarantee.
+
+## Shorter target leases
+
+For a shorter target lease, use `--duration 2h` with `--cheapest`, or a compatible explicit `--machine`. The plan quotes prepaid starter funding and records both machines, rates, requested target time, and estimated converted time. Supported routes stay within the verified Vultr `vc2` or AMD `voc-m` families and upgrade CPU, RAM, and disk in the same region. `open --approve` authorizes the saved starter purchase and one disk-growing resize using existing credit, with no additional payment.
+
+Funding uses whole starter days and includes a 30-minute preparation allowance, based on the observed 13-minute migration plus provisioning and guest checks. The estimate is not a fixed expiry; small targets can receive substantially more prepaid time than requested. The requested duration is the minimum remaining target lease before bootstrap, covering preparation and work from that point.
+
+`open` records and submits resize, then returns while migration runs. Observe `status NAME --refresh --json`; call `prepare NAME` to continue. Preparation observes the existing resize, verifies target resources and actual expiry, and submits bootstrap once. It returns without bootstrap while migration is pending. Lost acknowledgements are resolved by observing the same target; resize is never automatically resubmitted. If capacity or remaining time falls short, inspect or close the machine.
+
+Guest verification records usable memory, CPU, filesystem capacity, and free space. RAM uses provider nominal GiB plus usable guest memory rounded upward to a whole GiB for reserved pages. Workload-specific free-space gates still apply before snapshot import. The TUI shows observed resources during migration rather than presenting the target as already available.
 
 ## Run and collect
 

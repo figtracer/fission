@@ -14,7 +14,7 @@ export const providers = [{
   limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
 }, {
   id: "compute-mpp", available: true,
-  limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Minimum prepaid lease is 24 hours; early deletion does not imply a refund. SSH execution, jobs, export and destruction observed on a small VM. Large-disk allocation, P2P and synced-node performance remain unverified. No separate volume attachment or custom image support.",
+  limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Shorter target leases use a prepaid starter upgrade with capacity and time gates. Catalog capacity and P2P require guest verification; node readiness is a separate workload. Early deletion does not imply a refund.",
   payment: "MPP tempo.charge",
 }, {
   id: "smol-orthogonal", available: false,
@@ -80,52 +80,98 @@ const shortlistSize = 3;
 // Existing minimum allocation room for one launch and two shutdown calls.
 // This is an accounting floor, not an estimate of all lifecycle costs.
 const minimumHeadroom = 300n;
+// Observed large migration took 13 minutes; allow another 17 for provisioning
+// and guest verification. Actual remaining time is gated again before bootstrap.
+const preparationAllowanceSeconds = 30 * 60;
+const resizeFamily = (id) => /^vc2-/.test(id) ? "vc2" : /^voc-m-.*-amd$/.test(id) ? "voc-m-amd" : null;
+const hourlyRate = (machine) => {
+  if (!Number.isFinite(machine.our_hourly) || machine.our_hourly <= 0) throw new Error("Missing hourly compute rate.");
+  return money(String(machine.our_hourly));
+};
 const catalogPrice = (machine) => {
   if (typeof machine.our_daily !== "number" || !Number.isFinite(machine.our_daily) || machine.our_daily <= 0)
     throw new Error("Missing daily catalog price.");
   return money(String(machine.our_daily));
 };
 
+function rentalFor(machine, machines, seconds, region) {
+  if (seconds === 86400) return { estimate: catalogPrice(machine) };
+  const family = resizeFamily(machine.id);
+  if (!family) return null;
+  const targetRate = hourlyRate(machine), candidates = [];
+  for (const starter of machines) {
+    if (starter.provider !== "vultr" || starter.id === machine.id || resizeFamily(starter.id) !== family || !starter.locations?.includes(region)) continue;
+    let capabilities, rate;
+    try { capabilities = machineCapabilities(starter); rate = hourlyRate(starter); } catch { continue; }
+    if (rate >= targetRate || starter.vcpu_count > machine.vcpu_count || starter.ram > machine.ram || starter.disk > machine.disk) continue;
+    const needed = targetRate * BigInt(seconds + preparationAllowanceSeconds);
+    const dayCredit = catalogPrice(starter) * 3600n;
+    const prepaidHours = Number((needed + dayCredit - 1n) / dayCredit) * 24;
+    if (!Number.isSafeInteger(prepaidHours) || prepaidHours < 24) continue;
+    candidates.push({ estimate: catalogPrice(starter) * BigInt(prepaidHours / 24), lease: {
+      strategy: "prepaid-resize", starter: { id: starter.id }, starterCapabilities: capabilities, prepaidHours,
+      starterHourlyRate: amount(rate), targetHourlyRate: amount(targetRate),
+      requestedSeconds: seconds, preparationAllowanceSeconds,
+    } });
+  }
+  candidates.sort((a, b) => a.estimate < b.estimate ? -1 : a.estimate > b.estimate ? 1 : a.lease.starter.id.localeCompare(b.lease.starter.id));
+  return candidates[0] || null;
+}
+
+function quotedLease(lease, quotedAmount) {
+  if (!lease) return undefined;
+  const estimatedSeconds = Number(money(quotedAmount) * 3600n / money(lease.targetHourlyRate));
+  if (estimatedSeconds < lease.requestedSeconds + lease.preparationAllowanceSeconds)
+    throw new Error("Quoted starter credit does not cover the requested target lease and preparation allowance.");
+  return { ...lease, estimatedSeconds,
+    note: "Credit converts to a shorter target lease. Migration consumes time; actual hardware and remaining lease are checked before bootstrap." };
+}
+
 export async function machineOffers(options) {
   const { profile, requirements } = requirementsFor({ kind: "vm", ...options });
   const cap = await vmCeiling(profile, options["max-spend"]);
   if (cap === null || money(cap) <= 0n) throw new Error("Set a VM ceiling with budget --vm-max-spend AMOUNT --approve, or pass machines --max-spend AMOUNT for discovery.");
   if (!/^[a-z0-9-]+$/.test(options.region || "")) throw new Error("Select --region, such as ams. Compare offers in the same region.");
-  if (duration(options.duration || "24h") !== 86400) throw new Error("VM offers currently require --duration 24h; early deletion does not imply a refund.");
+  const seconds = duration(options.duration || "24h");
+  const machines = await catalog();
   const candidates = [], seen = new Set();
-  let compatible = 0, omitted = 0;
-  for (const machine of await catalog()) {
+  let compatible = 0, omitted = 0, unsupportedLease = 0;
+  for (const machine of machines) {
     if (machine.provider !== "vultr" || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
     seen.add(machine.id);
-    let capabilities, estimate;
-    try { capabilities = machineCapabilities(machine); estimate = catalogPrice(machine); }
+    let capabilities, rental;
+    try { capabilities = machineCapabilities(machine); rental = rentalFor(machine, machines, seconds, options.region); }
     catch { omitted++; continue; }
     if (Object.entries(requirements).some(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value))) continue;
     compatible++;
-    if (estimate > money(cap)) continue;
-    candidates.push({ machine, capabilities, estimate });
+    if (!rental) { unsupportedLease++; continue; }
+    if (rental.estimate > money(cap)) continue;
+    candidates.push({ machine, capabilities, ...rental });
   }
   candidates.sort((a, b) => a.estimate < b.estimate ? -1 : a.estimate > b.estimate ? 1 : a.machine.id.localeCompare(b.machine.id));
   const offers = [];
   let quoteFailures = 0, changedBeyondCap = 0;
-  for (const { machine, capabilities, estimate } of candidates.slice(0, shortlistSize)) {
-    let offer;
-    try { offer = await quote("create", { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: 24, label: "fission-quote" }, "compute-mpp"); }
+  for (const { machine, capabilities, estimate, lease } of candidates.slice(0, shortlistSize)) {
+    let offer, quoted;
+    try {
+      offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: lease?.prepaidHours || 24, label: "fission-quote" }, "compute-mpp");
+      quoted = quotedLease(lease, offer.amount);
+    }
     catch { quoteFailures++; continue; }
     if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
     offers.push({ provider: "compute-mpp", machine: machine.id, region: options.region, capabilities,
       creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
-      quotedAt: new Date().toISOString(), leaseHours: 24 });
+      quotedAt: new Date().toISOString(), leaseHours: lease ? null : 24, requestedHours: seconds / 3600, lease: quoted });
   }
   offers.sort((a, b) => money(a.creationQuote) < money(b.creationQuote) ? -1 : money(a.creationQuote) > money(b.creationQuote) ? 1 : a.machine.localeCompare(b.machine));
   const prices = offers.map((offer) => money(offer.creationQuote));
   return { status: offers.length ? "quoted" : "unavailable", profile, requirements, ceiling: cap, currency: "USDC.e",
-    region: options.region, leaseHours: 24, paymentSubmitted: false,
+    region: options.region, leaseHours: seconds === 86400 ? 24 : null, requestedHours: seconds / 3600, paymentSubmitted: false,
     offers, average: prices.length ? { amount: amount((prices.reduce((a, b) => a + b, 0n) + BigInt(prices.length) - 1n) / BigInt(prices.length)),
       minimum: amount(prices[0]), maximum: amount(prices.at(-1)), sampleCount: prices.length, providerCount: 1,
-      basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for 24 hours. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
-    excluded: { overCeiling: compatible - candidates.length + changedBeyondCap, incompleteCatalog: omitted, quoteFailures },
+      basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for the requested target duration. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
+    excluded: { overCeiling: compatible - unsupportedLease - candidates.length + changedBeyondCap, unsupportedLease, incompleteCatalog: omitted, quoteFailures },
     note: offers.length ? "Capacity and inventory are provider catalog claims; plan and open re-quote before payment. Leave allocation room for lifecycle operations." : "No verified quote within the ceiling. Requirements and budget were preserved." };
 }
 
@@ -155,7 +201,7 @@ export async function createPlan(name, options) {
     if (options.budget === undefined) throw new Error("Use --cheapest with a whole-workspace --budget.");
     if (options.machine || (options.provider && options.provider !== "compute-mpp") || (options.kind && options.kind !== "vm"))
       throw new Error("--cheapest selects a compute VM; do not combine it with --machine or an incompatible provider/kind.");
-    if (duration(options.duration) !== 86400) throw new Error("--cheapest requires an explicit --duration 24h.");
+    if (!options.duration) throw new Error("--cheapest requires an explicit --duration.");
     const cap = await vmCeiling(options.profile || "runtime");
     if (cap !== null && money(options.budget) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
     const discovery = await machineOffers(options);
@@ -169,15 +215,18 @@ export async function createPlan(name, options) {
   const provider = options.provider || "modal-tempo";
   const { profile, requirements } = requirementsFor({ ...(provider === "compute-mpp" ? { kind: "vm" } : {}), ...options });
   if (!["modal-tempo", "compute-mpp"].includes(provider)) throw new Error("Unknown provider.");
-  let machine, capabilities;
+  let machine, capabilities, rental;
   if (provider === "compute-mpp") {
-    machine = (await catalog()).find((item) => item.id === options.machine && item.provider === "vultr");
+    const machines = await catalog();
+    machine = machines.find((item) => item.id === options.machine && item.provider === "vultr");
     if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a Vultr --machine and --region from the live compute catalog.");
     capabilities = machineCapabilities(machine);
     const unmet = Object.entries(requirements).filter(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value)).map(([key, value]) => `${key}=${value}`);
     if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
-    if (duration(options.duration) !== 86400) return { status: "unavailable", reason: "This provider requires a 24-hour prepaid lease. Select --duration 24h explicitly; early deletion does not imply a refund.", paymentSubmitted: false };
+    const seconds = duration(options.duration);
+    rental = rentalFor(machine, machines, seconds, options.region);
+    if (!rental) return { status: "unavailable", reason: "No supported starter resize for this target duration and machine.", requirements, paymentSubmitted: false };
   } else {
     if (options.machine || options.region) throw new Error("Machine and region require --provider compute-mpp.");
     const matches = match(requirements);
@@ -193,7 +242,7 @@ export async function createPlan(name, options) {
   if (machine) {
     const cap = await vmCeiling(profile);
     if (cap !== null && money(totalCap) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
-    if (catalogPrice(machine) > money(creationCap)) return { status: "unavailable", reason: "Catalog estimate exceeds the creation cap; no quote or payment submitted.", requirements, paymentSubmitted: false };
+    if (rental.estimate > money(creationCap)) return { status: "unavailable", reason: "Catalog estimate exceeds the creation cap; no quote or payment submitted.", requirements, paymentSubmitted: false };
   }
   let source;
   if (options.repo || options.ref) {
@@ -212,14 +261,15 @@ export async function createPlan(name, options) {
       const result = await runProcess("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "fission", "-f", key]);
       if (result.code !== 0) throw new Error("Could not create workspace SSH key.");
     }
-    body = { plan: machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
-      prepaid_hours: 24, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
+    body = { plan: rental.lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
+      prepaid_hours: rental.lease?.prepaidHours || 24, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
   }
   const offer = await quote("create", body, provider);
   if (money(offer.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
   if (selection && money(offer.amount) > money(selection.selectedQuote)) throw new Error("Quote increased after selection. No purchase submitted; request a fresh plan.");
   if (options.budget !== undefined) creationCap = offer.amount;
-  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
+  const lease = quotedLease(rental?.lease, offer.amount);
+  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
   return { ...value, paymentSubmitted: false, open: ["fission", "open", name, "--plan", value.id, "--approve"],
@@ -238,14 +288,22 @@ export async function openPlan(name, id) {
   if (value.provider === "compute-mpp") {
     const cap = await vmCeiling(value.profile);
     if (cap !== null && money(value.totalCap) > money(cap)) throw new Error("Saved allocation exceeds the current VM ceiling. Generate a lower-budget plan.");
-    const current = (await catalog()).find((item) => item.id === value.body.plan && item.provider === "vultr");
+    const machines = await catalog();
+    const current = machines.find((item) => item.id === value.machine.id && item.provider === "vultr");
     if (!current || !current.locations.includes(value.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(value.capabilities))
       throw new Error("Compute plan capacity changed. Generate a fresh plan.");
+    if (value.lease) {
+      const starter = machines.find((item) => item.id === value.body.plan && item.provider === "vultr");
+      if (!starter || !starter.locations.includes(value.body.region) || JSON.stringify(machineCapabilities(starter)) !== JSON.stringify(value.lease.starterCapabilities) ||
+          hourlyRate(starter) !== money(value.lease.starterHourlyRate) || hourlyRate(current) !== money(value.lease.targetHourlyRate))
+        throw new Error("Starter capacity or conversion rates changed. Generate a fresh plan.");
+    }
     if ((await readFile(join(directory(name), "id_ed25519.pub"), "utf8")).trim() !== value.body.ssh_public_key)
       throw new Error("Workspace SSH public key changed after planning.");
   } else if (!match(value.requirements).some((item) => item.provider === value.provider && !item.unmet.length))
     throw new Error("Provider no longer satisfies the saved requirements.");
   const offer = await quote("create", value.body, value.provider);
   if (money(offer.amount) > money(value.creationCap)) throw new Error("Current quote exceeds the approved creation cap.");
+  quotedLease(value.lease, offer.amount);
   return start(name, { ...value, creationQuote: offer.amount, asyncPreparation: true });
 }

@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { directory, readJSON, writeJSON, save } from "./state.mjs";
 import { reserve } from "./budget.mjs";
-import { runProcess, validRemoteId } from "./provider.mjs";
+import { runProcess, validRemoteId, money } from "./provider.mjs";
 
 const endpoint = "https://compute.x402layer.cc/compute/";
 const usableIP = (value) => isIP(value || "") && !["0.0.0.0", "::", "127.0.0.1", "::1"].includes(value);
@@ -47,14 +48,15 @@ export async function adopt(state, response) {
   return order.id;
 }
 
-async function management(state, method, options = {}) {
+async function management(state, method, options = {}, body) {
   if (!validRemoteId(state, state.remoteId)) throw new Error("Invalid compute order ID.");
   const auth = await readJSON(credentials(state));
   if (!auth?.key) throw new Error("Missing saved compute management credential.");
   const timeout = AbortSignal.timeout(Math.max(1, Math.min(60000, (options.deadline || Infinity) - Date.now())));
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  const response = await fetch(endpoint + "instances/" + state.remoteId, {
-    method, headers: { "X-API-Key": auth.key }, signal, redirect: "error",
+  const response = await fetch(endpoint + "instances/" + state.remoteId + (body ? "/resize" : ""), {
+    method, headers: { "X-API-Key": auth.key, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined, signal, redirect: "error",
   });
   // A 404 is not proof of destruction: it can mean lost authorization or routing.
   if (!response.ok) throw new Error(`Compute ${method} HTTP ${response.status}; outcome requires observation.`);
@@ -115,7 +117,9 @@ async function ssh(state, command, options = {}) {
 }
 
 export async function computeRequest(state, operation, body, id, options) {
-  if (!["exec", "status", "terminate"].includes(operation)) throw new Error("Unsupported compute operation.");
+  if (!["exec", "status", "terminate", "resize"].includes(operation)) throw new Error("Unsupported compute operation.");
+  if (operation === "resize" && (!state.lease || state.resizeRequest !== id || body.plan !== state.machine.id || body.confirm_disk_resize !== true))
+    throw new Error("Resize requires the recorded target and disk-growth approval from a saved plan.");
   const path = join(directory(state.name), "requests", `${id}.json`);
   if (await readJSON(path)) throw new Error("Request already recorded; reconcile it.");
   await reserve(state, operation, "0", id);
@@ -127,9 +131,17 @@ export async function computeRequest(state, operation, body, id, options) {
     await writeJSON(join(directory(state.name), "requests", `${id}.response.json`), result);
   }
   else {
-    const response = await management(state, operation === "terminate" ? "DELETE" : "GET", options);
+    const response = await management(state, operation === "resize" ? "POST" : operation === "terminate" ? "DELETE" : "GET", options, operation === "resize" ? body : undefined);
     await writeJSON(join(directory(state.name), "requests", `${id}.response.json`), response);
-    if (operation === "terminate") {
+    if (operation === "resize") {
+      if (response.success !== true || response.instance_id !== state.remoteId || response.to_plan !== state.machine.id || !Number.isFinite(Date.parse(response.new_expires_at)))
+        throw new Error("Resize outcome unresolved. Observe the same instance; do not repeat the request.");
+      state.providerExpiresAt = new Date(Math.min(Date.parse(state.providerExpiresAt), Date.parse(response.new_expires_at))).toISOString();
+      state.leasePhase = "resizing";
+      state.resizePending = true;
+      await save(state);
+      result = { status: "resizing" };
+    } else if (operation === "terminate") {
       if (response.success !== true) throw new Error("Deletion acknowledgement unrecognized; inspect status.");
       result = { status: "terminated" }; // workspace lifecycle still requires a subsequent GET.
     } else {
@@ -137,8 +149,11 @@ export async function computeRequest(state, operation, body, id, options) {
       if (!order || order.id !== state.remoteId) throw new Error("Unrecognized compute instance response.");
       if (usableIP(order.ip_address)) state.sshHost = order.ip_address;
       const pending = order.metadata?.resize_pending;
-      state.resizePending = Boolean(pending);
-      const expiries = [order.expires_at, pending?.new_expires_at, pending ? state.providerExpiresAt : undefined].filter((value) => Number.isFinite(Date.parse(value)));
+      state.observedMachine = order.vultr_plan;
+      state.observedServerStatus = order.vultr_server_status;
+      state.resizePending = Boolean(pending) || Boolean(state.lease && state.resizeRequest &&
+        (order.vultr_plan !== state.machine.id || order.vultr_server_status !== "ok"));
+      const expiries = [order.expires_at, pending?.new_expires_at, state.resizePending ? state.providerExpiresAt : undefined].filter((value) => Number.isFinite(Date.parse(value)));
       if (expiries.length) state.providerExpiresAt = expiries.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       state.providerStatus = order.status;
       if ([order.vultr_vcpu_count, order.vultr_ram, order.vultr_disk].every((value) => Number.isFinite(value) && value > 0))
@@ -172,4 +187,57 @@ export async function prepareAccess(state) {
     await delay(Math.min(5000, Math.max(1, until - Date.now())));
   }
   throw new Error("SSH readiness timed out. Reconcile the existing instance; do not purchase again.");
+}
+
+// A short rental buys a starter once and converts its credit in place. prepare
+// resumes observations after migration; neither purchase nor resize is replayed.
+export async function prepareLease(state) {
+  await computeRequest(state, "status", {}, randomUUID());
+  if (["destroyed", "terminated"].includes(state.providerStatus)) throw new Error("The provider terminated this lease. Observe status.");
+  if (!state.resizeRequest) {
+    if (state.observedMachine !== state.body.plan || state.resizePending)
+      throw new Error("Starter state differs from the saved plan. Inspect before resizing.");
+    await prepareAccess(state);
+    const machines = await catalog();
+    const target = machines.find((item) => item.provider === "vultr" && item.id === state.machine.id);
+    const starter = machines.find((item) => item.provider === "vultr" && item.id === state.body.plan);
+    if (!target || !starter || !target.locations.includes(state.body.region) || !starter.locations.includes(state.body.region) ||
+        money(String(target.our_hourly)) !== money(state.lease.targetHourlyRate) || money(String(starter.our_hourly)) !== money(state.lease.starterHourlyRate) ||
+        JSON.stringify(machineCapabilities(target)) !== JSON.stringify(state.capabilities) || JSON.stringify(machineCapabilities(starter)) !== JSON.stringify(state.lease.starterCapabilities))
+      throw new Error("Resize capacity or rates changed after purchase. Inspect or close the starter.");
+    const remaining = Date.parse(state.providerExpiresAt) - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new Error("Starter expiry is unavailable or elapsed.");
+    const converted = Number(BigInt(Math.floor(remaining)) * money(state.lease.starterHourlyRate) / money(state.lease.targetHourlyRate));
+    if (converted < state.durationSeconds * 1000) throw new Error("Remaining credit cannot cover the requested target lease. Close or inspect the starter.");
+    state.resizeRequest = randomUUID();
+    state.leasePhase = "resize_unknown";
+    state.resizePending = true;
+    // Persist the shorter bound before dispatch, including when the reply is lost.
+    state.providerExpiresAt = new Date(Date.now() + Math.min(remaining, converted)).toISOString();
+    await save(state);
+    await computeRequest(state, "resize", { plan: state.machine.id, confirm_disk_resize: true }, state.resizeRequest);
+    return false;
+  }
+  if (state.resizePending || state.observedMachine !== state.machine.id || !["active", "running"].includes(state.providerStatus)) return false;
+  for (const key of ["cpu", "memoryGiB", "diskGiB"])
+    if (!Number.isFinite(state.observedResources?.[key]) || state.observedResources[key] < state.capabilities[key])
+      throw new Error("Provider has not confirmed the planned target capacity.");
+  if (Date.parse(state.providerExpiresAt) - Date.now() < state.durationSeconds * 1000)
+    throw new Error("Migration left less than the requested target lease. Inspect or close this machine.");
+  await prepareAccess(state);
+  const probe = "import json,os,platform; s=os.statvfs('/'); m=int(next(x.split()[1] for x in open('/proc/meminfo') if x.startswith('MemTotal:')))*1024; print(json.dumps({'architecture':platform.machine(),'cpu':os.cpu_count(),'memoryBytes':m,'diskBytes':s.f_blocks*s.f_frsize,'freeBytes':s.f_bavail*s.f_frsize}))";
+  const result = await computeRequest(state, "exec", { command: ["python3", "-c", probe] }, randomUUID());
+  if (result.returncode !== 0) throw new Error("Guest capacity observation failed.");
+  const guest = JSON.parse(result.stdout), required = state.requirements;
+  if (guest.architecture !== "x86_64" || ![guest.cpu, guest.memoryBytes, guest.diskBytes, guest.freeBytes].every((value) => Number.isSafeInteger(value) && value > 0) ||
+      guest.cpu < state.capabilities.cpu || guest.diskBytes < (required.diskGiB || 0) * 2 ** 30 ||
+      // Provider RAM is nominal GiB; usable pages exclude firmware/kernel reserve.
+      Math.ceil(guest.memoryBytes / 2 ** 30) < (required.memoryGiB || 1))
+    throw new Error("Guest capacity does not satisfy the workload. Inspect or close the machine.");
+  if (Date.parse(state.providerExpiresAt) - Date.now() < state.durationSeconds * 1000)
+    throw new Error("Insufficient target lease remains for preparation and work.");
+  state.guestResources = { ...guest, observedAt: new Date().toISOString() };
+  state.leasePhase = "verified";
+  await save(state);
+  return true;
 }

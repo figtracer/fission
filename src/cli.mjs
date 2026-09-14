@@ -21,7 +21,7 @@ Machines and budgets
   capabilities
   ssh NAME
   spending [--refresh]
-  machines --profile reth-source --region ams [--max-spend AMOUNT --duration 24h]
+  machines --profile reth-source --region ams [--max-spend AMOUNT --duration DURATION]
     [--cpu N --memory GiB --disk GiB --os linux --arch x86_64 --kind vm]
   budget [--total-spend AMOUNT --approve]
     [--vm-max-spend AMOUNT --profile PROFILE --approve]
@@ -34,7 +34,9 @@ Planning and preparation
     [--repo https://github.com/OWNER/REPO --ref FULL_COMMIT]
     [--provider compute-mpp --machine PLAN --region REGION --duration 24h]
     Use --budget AMOUNT instead of both spending caps. Add --cheapest --region
-    REGION --duration 24h to select the cheapest compatible quoted VM.
+    REGION --duration DURATION to select the cheapest compatible quoted VM.
+    Below 24h, the plan funds a starter and resizes it into the target.
+    After migration, prepare NAME verifies capacity/time and starts bootstrap.
     Source recipes: foundry-source, reth-source, tempo-source require --repo/--ref
     and prepare /workspace/build for a separate bounded build job.
     reth-synced prepares /workspace/ethereum; snapshot import and sync are separate jobs.
@@ -106,6 +108,7 @@ function summary(state) {
     providerExpiresAt: state.providerExpiresAt,
     closedAt: state.closedAt,
     remoteStatus: state.remoteStatus, providerStatus: state.providerStatus, resizePending: state.resizePending, observedResources: state.observedResources, exportedTo: state.exportedTo,
+    lease: state.lease, leasePhase: state.leasePhase, guestResources: state.guestResources,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, source: state.source, planId: state.id,
   };

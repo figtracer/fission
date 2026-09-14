@@ -31,7 +31,7 @@ async function main() {
     const paid = report.unknownWorkspaces?.includes(state.name) || !transactions.length ||
       transactions.some((item) => item.paid === null || item.workspaces.length !== 1) ? null :
       transactions.reduce((sum, item) => sum + units(item.paid), 0n);
-    const capacity = state.observedResources || state.capabilities;
+    const capacity = state.observedResources || (state.lease ? state.lease.starterCapabilities : state.capabilities);
     const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
     return {
       name: state.name, phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, finished,
