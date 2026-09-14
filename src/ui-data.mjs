@@ -6,6 +6,7 @@ import { spending } from "./payments.mjs";
 import { close, refresh, operationCap } from "./workspace.mjs";
 import { units, amount } from "./budget.mjs";
 import { providerWarning } from "./provider.mjs";
+import { availableMachines, quoteMachine } from "./ui-catalog.mjs";
 
 const money = (value) => {
   if (value == null) return "unknown";
@@ -17,6 +18,7 @@ const date = (value) => Number.isFinite(Date.parse(value)) ? new Date(value).toI
 async function main() {
   const [action, name] = process.argv.slice(2);
   let message = "";
+  let available;
   if (action === "close") {
     await mkdir(join(root, "exports"), { recursive: true, mode: 0o700 });
     const result = await close(name, { output: join(root, "exports", `${name}-${Date.now()}`) });
@@ -24,7 +26,9 @@ async function main() {
   } else if (action === "refresh") {
     await refresh(name);
     message = "Provider status updated.";
-  } else if (!["snapshot", "verify"].includes(action)) throw new Error("Unknown TUI operation.");
+  } else if (action === "catalog") available = await availableMachines();
+  else if (action === "quote") message = await quoteMachine(name);
+  else if (!["snapshot", "verify"].includes(action)) throw new Error("Unknown TUI operation.");
   const states = await list(), report = await spending({ refresh: action === "verify" });
   if (action === "verify") message = report.refreshError || "Payment receipts checked; missing amounts remain unknown.";
   const machines = states.map((state) => {
@@ -34,8 +38,11 @@ async function main() {
       transactions.reduce((sum, item) => sum + units(item.paid), 0n);
     const capacity = state.observedResources || (state.lease ? state.lease.starterCapabilities : state.capabilities);
     const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
+    const unresolved = state.phase.endsWith("_unknown");
     return {
-      name: state.name, phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
+      name: state.name, project: state.project || state.source?.url?.split("/").at(-1)?.replace(/\.git$/, "") || state.recipe.name.replace(/-(source|synced|node)$/, ""),
+      phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
+      active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
       ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
       requested: state.requestedAt || "", expiry: Math.floor(Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000) || null,
       estimated: !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
@@ -46,7 +53,7 @@ async function main() {
       transactions: transactions.map((item) => ({ paid: money(item.paid), operation: item.operation || "unknown", hash: item.hash })),
     };
   });
-  console.log(JSON.stringify({ machines, message,
+  console.log(JSON.stringify({ machines, message, available,
     spending: `paid ${money(report.paid)} ${report.currency}${report.pendingVerification || report.unresolvedRequests || report.unreadableRecords ? " + unknown" : ""}    allocated ${money(report.budget?.allocated)} / ${money(report.budget?.limit)}`,
   }));
 }

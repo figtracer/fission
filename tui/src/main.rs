@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     io::{self, IsTerminal, Write, stdout},
     path::PathBuf,
@@ -14,7 +15,10 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEventKind,
+    },
     execute, queue,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -30,12 +34,41 @@ struct Snapshot {
     machines: Vec<Machine>,
     spending: String,
     message: String,
+    available: Option<Catalog>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Catalog {
+    machines: Vec<Offer>,
+    ceiling: String,
+    fetched_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Offer {
+    id: String,
+    provider: String,
+    provider_warning: bool,
+    cpu: f64,
+    memory: f64,
+    disk: u64,
+    daily: String,
+    regions: Vec<String>,
+    within_cap: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Machine {
     name: String,
+    #[serde(default)]
+    project: String,
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    unresolved: bool,
     phase: String,
     provider: String,
     #[serde(default)]
@@ -73,9 +106,23 @@ struct View {
     offset: usize,
     confirm: Option<String>,
     message: String,
+    available: bool,
+    all_prices: bool,
+    region: usize,
+    collapsed: BTreeSet<String>,
 }
 
-const FILTERS: [&str; 3] = ["all", "active", "past"];
+fn offers<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Offer> {
+    data.available.as_ref().map_or_else(Vec::new, |catalog| {
+        catalog
+            .machines
+            .iter()
+            .filter(|m| view.all_prices || m.within_cap)
+            .collect()
+    })
+}
+
+const FILTERS: [&str; 3] = ["all", "active", "history"];
 const SORTS: [&str; 4] = ["recent", "name", "paid", "expiry"];
 
 fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
@@ -83,8 +130,8 @@ fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
         .machines
         .iter()
         .filter(|m| match view.filter {
-            1 => !m.finished,
-            2 => m.finished,
+            1 => m.active,
+            2 => !m.active,
             _ => true,
         })
         .collect();
@@ -113,6 +160,33 @@ fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
         .then_with(|| a.name.cmp(&b.name))
     });
     rows
+}
+
+enum Row<'a> {
+    Project(&'a str, usize),
+    Machine(&'a Machine),
+}
+
+fn grouped<'a>(data: &'a Snapshot, view: &View) -> Vec<Row<'a>> {
+    let mut projects: BTreeMap<&str, Vec<&Machine>> = BTreeMap::new();
+    for machine in machines(data, view) {
+        projects.entry(&machine.project).or_default().push(machine);
+    }
+    let mut rows = Vec::new();
+    for (project, machines) in projects {
+        rows.push(Row::Project(project, machines.len()));
+        if !view.collapsed.contains(project) {
+            rows.extend(machines.into_iter().map(Row::Machine));
+        }
+    }
+    rows
+}
+
+fn selected<'a>(data: &'a Snapshot, view: &View) -> Option<&'a Machine> {
+    match grouped(data, view).get(view.index) {
+        Some(Row::Machine(machine)) => Some(*machine),
+        _ => None,
+    }
 }
 
 fn remaining(m: &Machine) -> String {
@@ -169,7 +243,7 @@ impl Screen {
     fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let guard = Self;
-        execute!(stdout(), EnterAlternateScreen, Hide)?;
+        execute!(stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
         Ok(guard)
     }
 }
@@ -181,6 +255,7 @@ impl Drop for Screen {
             SetAttribute(Attribute::Reset),
             ResetColor,
             Show,
+            DisableMouseCapture,
             LeaveAlternateScreen
         );
     }
@@ -198,19 +273,123 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
         add("q quit".into(), 2);
     } else {
         add(String::new(), 0);
-        add("fission".into(), 1);
+        add("fission   [my machines]   [available]".into(), 1);
         add(
             format!(
-                "{} active / {} recorded",
-                data.machines.iter().filter(|m| !m.finished).count(),
-                data.machines.len()
+                "{} active / {} recorded / {} unresolved",
+                data.machines.iter().filter(|m| m.active).count(),
+                data.machines.len(),
+                data.machines.iter().filter(|m| m.unresolved).count()
             ),
             2,
         );
         add(data.spending.clone(), 0);
         add(String::new(), 0);
-        let rows = machines(data, view);
-        if !view.detail {
+        let rows = grouped(data, view);
+        if view.available {
+            add(
+                format!(
+                    "available / {} / daily catalog estimates in USDC.e",
+                    if view.all_prices {
+                        "all prices"
+                    } else {
+                        "within VM cap"
+                    }
+                ),
+                2,
+            );
+            if let Some(catalog) = &data.available {
+                let available = offers(data, view);
+                add(
+                    format!(
+                        "VM cap {} / fetched {}",
+                        catalog.ceiling, catalog.fetched_at
+                    ),
+                    2,
+                );
+                if view.detail {
+                    if let Some(m) = available.get(view.index) {
+                        add(
+                            format!("{}{}", if m.provider_warning { "! " } else { "" }, m.id),
+                            1,
+                        );
+                        add(format!("{} / Linux x86_64", m.provider), 0);
+                        add(
+                            format!(
+                                "{} vCPU / {} GiB RAM / {} GiB disk",
+                                m.cpu, m.memory, m.disk
+                            ),
+                            0,
+                        );
+                        add(format!("{} USDC.e / 24h estimate", m.daily), 0);
+                        add(
+                            format!(
+                                "region {} / {} regions / g next",
+                                m.regions[view.region % m.regions.len()],
+                                m.regions.len()
+                            ),
+                            0,
+                        );
+                        add("enter fetches a fresh quote".into(), 2);
+                        add(
+                            "Agent plans choose the workload, duration, and budget.".into(),
+                            2,
+                        );
+                    }
+                } else {
+                    add(
+                        format!(
+                            "  {:<30} {:>4} {:>7} {:>7} {:>10}",
+                            "machine", "CPU", "RAM GiB", "disk GiB", "USDC.e/day"
+                        ),
+                        2,
+                    );
+                    let count = height.saturating_sub(14).max(1);
+                    let offset = view.index / count * count;
+                    for (i, m) in available.iter().enumerate().skip(offset).take(count) {
+                        add(
+                            format!(
+                                "{} {:<30} {:>4} {:>7} {:>7} {:>10}",
+                                if i == view.index { ">" } else { " " },
+                                clip(
+                                    &format!(
+                                        "{}{}",
+                                        if m.provider_warning { "! " } else { "" },
+                                        m.id
+                                    ),
+                                    30
+                                ),
+                                m.cpu,
+                                m.memory,
+                                m.disk,
+                                m.daily
+                            ),
+                            if i == view.index { 3 } else { 0 },
+                        );
+                    }
+                    add(
+                        format!(
+                            "{} / {} options",
+                            if available.is_empty() {
+                                0
+                            } else {
+                                view.index + 1
+                            },
+                            available.len()
+                        ),
+                        2,
+                    );
+                    if available.is_empty() {
+                        add(
+                            "No catalog options in this view. b shows all prices.".into(),
+                            0,
+                        );
+                    }
+                }
+            } else {
+                add("r loads the available VM catalog".into(), 0);
+            }
+        } else if !view.detail {
             add(
                 format!(
                     "{} machines    sort: {}",
@@ -239,7 +418,26 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
             );
             let count = height.saturating_sub(12).max(1);
             let offset = view.index / count * count;
-            for (i, m) in rows.iter().enumerate().skip(offset).take(count) {
+            for (i, item) in rows.iter().enumerate().skip(offset).take(count) {
+                if let Row::Project(project, count) = item {
+                    add(
+                        format!(
+                            "{} {} {} ({count})",
+                            if i == view.index { ">" } else { " " },
+                            if view.collapsed.contains(*project) {
+                                "+"
+                            } else {
+                                "-"
+                            },
+                            project
+                        ),
+                        if i == view.index { 3 } else { 1 },
+                    );
+                    continue;
+                }
+                let Row::Machine(m) = item else {
+                    unreachable!()
+                };
                 add(
                     format!(
                         "{}{}",
@@ -264,7 +462,7 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
             if rows.len() > count {
                 add(format!("{} / {}", view.index + 1, rows.len()), 2);
             }
-        } else if let Some(m) = rows.get(view.index) {
+        } else if let Some(m) = selected(data, view) {
             add(m.name.clone(), 1);
             add(
                 format!(
@@ -328,7 +526,11 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
         lines.resize(height - 4, (String::new(), 0));
         lines.push((
             if view.message.is_empty() {
-                "cached view / v verifies payments / paid includes token fees".into()
+                if view.available {
+                    "Catalog estimates / plan and open verify terms before payment".into()
+                } else {
+                    "cached view / v verifies payments / paid includes token fees".into()
+                }
             } else {
                 view.message.clone()
             },
@@ -338,19 +540,23 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
             if busy {
                 "Operation in progress / q exits after it finishes".into()
             } else if let Some(name) = &view.confirm {
-                format!("Close {name}? y save declared files and close / n cancel")
+                format!("[cancel] [save and close {name}] / n or y")
+            } else if view.available {
+                "[back] [details / quote] / enter select / q quit".into()
             } else if view.detail {
-                "enter SSH / p check machine / x close / esc back / q quit".into()
+                "[back] [SSH] [check] [close] / enter SSH / q quit".into()
             } else {
                 "up/down select / enter details / tab filter / s sort / q quit".into()
             },
             2,
         ));
         lines.push((
-            if view.detail {
+            if view.available {
+                "[owned] [prices] [region] [reload] / a b g r"
+            } else if view.detail {
                 "up/down scroll receipts / r reload / v verify payments"
             } else {
-                "r reload / v verify payments / ~ estimated expiry"
+                "a available / r reload / v verify payments / ~ estimated expiry"
             }
             .into(),
             2,
@@ -429,6 +635,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut screen = Some(Screen::enter()?);
     let mut data = Snapshot::default();
     let mut view = View {
+        sort: 1,
         message: "Loading local machines...".into(),
         ..View::default()
     };
@@ -441,22 +648,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(rx) = &pending {
             match rx.try_recv() {
                 Ok(result) => {
-                    let selected = machines(&data, &view)
-                        .get(view.index)
-                        .map(|m| m.name.clone());
+                    let previous_machine = selected(&data, &view).map(|m| m.name.clone());
                     match result {
-                        Ok(new) => {
+                        Ok(mut new) => {
                             view.message = new.message.clone();
+                            if data.machines.is_empty() && !new.machines.is_empty() {
+                                view.collapsed =
+                                    new.machines.iter().map(|m| m.project.clone()).collect();
+                            }
+                            if new.available.is_none() {
+                                new.available = data.available.take();
+                            }
                             data = new;
-                            let rows = machines(&data, &view);
-                            view.index = rows
-                                .iter()
-                                .position(|m| Some(&m.name) == selected.as_ref())
-                                .unwrap_or(view.index.min(rows.len().saturating_sub(1)));
-                            view.offset = view.offset.min(
-                                rows.get(view.index)
-                                    .map_or(0, |m| m.transactions.len().saturating_sub(1)),
-                            );
+                            if view.available {
+                                view.index =
+                                    view.index.min(offers(&data, &view).len().saturating_sub(1));
+                            } else {
+                                let rows = grouped(&data, &view);
+                                view.index = rows
+                                    .iter()
+                                    .position(|row| matches!(row, Row::Machine(m) if Some(&m.name) == previous_machine.as_ref()))
+                                    .unwrap_or(view.index.min(rows.len().saturating_sub(1)));
+                                view.offset = view.offset.min(
+                                    selected(&data, &view)
+                                        .map_or(0, |m| m.transactions.len().saturating_sub(1)),
+                                );
+                            }
                         }
                         Err(error) => view.message = error,
                     }
@@ -475,8 +692,74 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         render(&data, &view, pending.is_some(), &mut previous)?;
         if event::poll(Duration::from_millis(250))? {
-            let Event::Key(key) = event::read()? else {
-                continue;
+            let key = match event::read()? {
+                Event::Key(key) => key,
+                Event::Mouse(mouse) if pending.is_none() => {
+                    let code = match mouse.kind {
+                        MouseEventKind::ScrollUp => KeyCode::Up,
+                        MouseEventKind::ScrollDown => KeyCode::Down,
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            let (_, height) = terminal::size()?;
+                            if view.confirm.is_some() {
+                                if mouse.row != height.saturating_sub(3) {
+                                    continue;
+                                }
+                                if mouse.column < 11 {
+                                    KeyCode::Char('n')
+                                } else {
+                                    KeyCode::Char('y')
+                                }
+                            } else if mouse.row == height.saturating_sub(3)
+                                && (view.available || view.detail)
+                            {
+                                match mouse.column {
+                                    2..9 => KeyCode::Esc,
+                                    9..15 => KeyCode::Enter,
+                                    15..23 if view.available => KeyCode::Enter,
+                                    15..23 => KeyCode::Char('p'),
+                                    23..30 if !view.available => KeyCode::Char('x'),
+                                    _ => continue,
+                                }
+                            } else if view.available && mouse.row == height.saturating_sub(2) {
+                                match mouse.column {
+                                    2..10 => KeyCode::Char('a'),
+                                    10..19 => KeyCode::Char('b'),
+                                    19..28 => KeyCode::Char('g'),
+                                    28..35 => KeyCode::Char('r'),
+                                    _ => continue,
+                                }
+                            } else if mouse.row == 1 && (12..38).contains(&mouse.column) {
+                                let available = mouse.column >= 27;
+                                if available == view.available {
+                                    continue;
+                                }
+                                KeyCode::Char('a')
+                            } else if !view.detail {
+                                let start = if view.available { 8 } else { 7 };
+                                let count = usize::from(height)
+                                    .saturating_sub(if view.available { 14 } else { 12 })
+                                    .max(1);
+                                let row = usize::from(mouse.row);
+                                let length = if view.available {
+                                    offers(&data, &view).len()
+                                } else {
+                                    grouped(&data, &view).len()
+                                };
+                                let index = view.index / count * count + row.saturating_sub(start);
+                                if row < start || row >= start + count || index >= length {
+                                    continue;
+                                }
+                                view.index = index;
+                                KeyCode::Enter
+                            } else {
+                                continue;
+                            }
+                        }
+                        _ => continue,
+                    };
+                    KeyEvent::new(code, KeyModifiers::NONE)
+                }
+                _ => continue,
             };
             if key.kind == KeyEventKind::Release {
                 continue;
@@ -491,12 +774,60 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if pending.is_some() || quitting {
                 continue;
             }
-            let rows = machines(&data, &view);
-            let selected = rows.get(view.index).copied();
+            let rows = grouped(&data, &view);
+            let selected = selected(&data, &view);
             let mut action = None;
             if let Some(name) = view.confirm.take() {
                 if key.code == KeyCode::Char('y') {
                     action = Some(("close", name));
+                }
+            } else if key.code == KeyCode::Char('a') {
+                view.available = !view.available;
+                view.detail = false;
+                view.index = 0;
+                view.offset = 0;
+                view.message.clear();
+                if view.available && data.available.is_none() {
+                    action = Some(("catalog", String::new()));
+                }
+            } else if view.available {
+                let rows = offers(&data, &view);
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') if !view.detail => {
+                        view.index = view.index.saturating_sub(1)
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if !view.detail => {
+                        view.index = (view.index + 1).min(rows.len().saturating_sub(1))
+                    }
+                    KeyCode::Char('b') => {
+                        view.all_prices = !view.all_prices;
+                        view.index = 0;
+                        view.detail = false;
+                        view.message.clear();
+                    }
+                    KeyCode::Char('r') => action = Some(("catalog", String::new())),
+                    KeyCode::Esc | KeyCode::Backspace => {
+                        view.detail = false;
+                        view.message.clear();
+                    }
+                    KeyCode::Char('g') if view.detail => {
+                        if let Some(m) = rows.get(view.index) {
+                            view.region = (view.region + 1) % m.regions.len();
+                            view.message.clear();
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let Some(m) = rows.get(view.index) {
+                            if view.detail {
+                                action = Some(("quote", serde_json::json!({"id": m.id, "region": m.regions[view.region % m.regions.len()]}).to_string()));
+                            } else {
+                                view.detail = true;
+                                view.region = 0;
+                                view.message.clear();
+                            }
+                        }
+                    }
+                    _ => (),
                 }
             } else {
                 match key.code {
@@ -545,6 +876,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     KeyCode::Enter => {
+                        if !view.detail
+                            && let Some(Row::Project(project, _)) = rows.get(view.index)
+                        {
+                            if !view.collapsed.remove(*project) {
+                                view.collapsed.insert((*project).to_owned());
+                            }
+                            continue;
+                        }
                         if let Some(m) = selected {
                             if !view.detail {
                                 view.detail = true;
@@ -559,10 +898,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 drop(screen.take());
                                 let result = (|| -> io::Result<_> {
-                                    let mut child = Command::new(&node)
-                                        .arg(&cli)
-                                        .args(["ssh", &m.name])
-                                        .spawn()?;
+                                    let mut command = Command::new(&node);
+                                    command.arg(&cli).args(["ssh", &m.name]);
+                                    if env::var_os("FISSION_TMUX_SESSION").is_some() {
+                                        command.arg("--tmux");
+                                    }
+                                    let mut child = command.spawn()?;
                                     let mut stopping = false;
                                     loop {
                                         if terminated.load(Ordering::Relaxed) && !stopping {
@@ -597,6 +938,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     view.message = match action {
                         "close" => format!("Saving and closing {name}..."),
                         "verify" => "Verifying payment receipts...".into(),
+                        "catalog" => "Loading available machines...".into(),
+                        "quote" => "Fetching a fresh quote...".into(),
                         _ => "Reloading local state...".into(),
                     };
                 }
@@ -605,6 +948,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         if pending.is_none()
             && !quitting
+            && !view.available
             && view.confirm.is_none()
             && last_load.elapsed() >= Duration::from_secs(5)
         {

@@ -90,7 +90,9 @@ export async function connect(name, options = {}) {
     state = await active(name);
     signal.throwIfAborted();
     return await new Promise((resolve, reject) => {
-      const child = spawn("ssh", [...sshArguments(state), "-tt", `root@${state.sshHost}`], { stdio: "inherit" });
+      // Bound dead interactive connections to two missed 15-second probes so
+      // their tmux windows close even when the provider drops packets silently.
+      const child = spawn("ssh", [...sshArguments(state), "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-tt", `root@${state.sshHost}`], { stdio: "inherit" });
       let failure, timer;
       const stop = () => {
         child.kill("SIGTERM");

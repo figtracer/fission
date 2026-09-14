@@ -79,7 +79,7 @@ export async function plan(name, options) {
   const body = { timeout };
   const offer = await quote("create", body);
   if (money(offer.amount) > money(maximum)) throw new Error(`Quote ${offer.amount} exceeds --max-spend ${maximum}.`);
-  return { name, provider: "modal-tempo", kind: "linux-sandbox", durationSeconds: timeout, creationQuote: offer.amount, creationCap: maximum, operationCap, recipe: definition, body };
+  return { name, project: basename(process.cwd()), provider: "modal-tempo", kind: "linux-sandbox", durationSeconds: timeout, creationQuote: offer.amount, creationCap: maximum, operationCap, recipe: definition, body };
 }
 
 export async function start(name, prepared) {

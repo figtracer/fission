@@ -4,15 +4,7 @@ Temporary compute for your coding agent. Quote a machine, pay through MPP with T
 
 ## Install
 
-Requires Node ≥22.13, Rust, SSH, a configured Tempo CLI wallet, and access to this repository.
-
-```sh
-git clone git@github.com:figtracer/fission.git
-cd fission
-npm run setup
-```
-
-Installs the CLI and the Fission skill in `~/.agents/skills/fission`.
+Install a [prebuilt release](docs/install.md) for macOS or Linux, including the agent skill. Requires Node ≥22.13, SSH, a configured Tempo CLI wallet, and repository access. [Source setup](docs/install.md#from-source) is also available.
 
 ## Use
 
@@ -29,6 +21,6 @@ fission
 fission help
 ```
 
-The default command opens the Rust TUI for machines, time remaining, spending, and transactions. A separate terminal is optional.
+The TUI shows your machines, time remaining, spending, and transactions. Press `a` to browse available VMs and fetch quotes. A separate terminal is optional.
 
-See [the agent skill](skills/fission/SKILL.md) and [rental workflow](docs/rental.md). Plans include funding details for existing [Glue](https://github.com/figtracer/glue) refill policies.
+See [the agent skill](skills/fission/SKILL.md) and [rental workflow](docs/rental.md).

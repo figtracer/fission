@@ -57,7 +57,7 @@ A provider resize sets `resizePending` and blocks new work while status/recovery
 
 ## Funding and receipts
 
-The plan's `funding` object carries Tempo chain 4217, the exact USDC.e payment token, creation amount, and allocation. Wallet balance and shortfall remain unknown. Use its preview arguments for an existing authorized Glue policy, matching the sender and `receiveToken` (`usdc.e`); Glue's `token` denotes swap input. New refill policies, targets, grants, or swap budgets need separate authorization. Fission supplies the handoff; the operator manages Glue execution.
+The plan's `funding` object carries Tempo chain 4217, the exact USDC.e payment token, creation amount, and allocation. Fission uses the configured Tempo wallet's existing funds. Wallet balance and shortfall remain unknown in the plan; check the wallet before purchasing.
 
 `fission spending --refresh` verifies saved transaction references through free Tempo RPC reads. It reports deduplicated sender USDC.e outflow, including fees in that token. Missing receipts remain unknown; other assets and later refunds are excluded. Receipts describe payments, while the retained ledger bounds authorization.
 

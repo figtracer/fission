@@ -269,14 +269,12 @@ export async function createPlan(name, options) {
   if (selection && money(offer.amount) > money(selection.selectedQuote)) throw new Error("Quote increased after selection. No purchase submitted; request a fresh plan.");
   if (options.budget !== undefined) creationCap = offer.amount;
   const lease = quotedLease(rental?.lease, offer.amount);
-  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, providerWarning: providerWarning(provider), kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
+  const value = { version: 1, status: "planned", id: randomUUID(), name, project: basename(process.cwd()), profile, requirements, provider, providerWarning: providerWarning(provider), kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
   return { ...value, paymentSubmitted: false, open: ["fission", "open", name, "--plan", value.id, "--approve"],
     funding: { ...paymentTerms, creationAmount: offer.amount, workspaceAllocation: totalCap,
-      remainingAllocation: amount(money(totalCap) - money(creationCap)), feesIncluded: false, balance: null, shortfall: null,
-      glue: { mode: "tempo-token", receiveToken: "usdc.e", preview: ["glue", "run", "--policy", "EXISTING_POLICY_FILE"],
-        note: "Preview an existing authorized Glue refill policy separately. A quote is not a balance, swap authorization, or permission to install a grant." } } };
+      remainingAllocation: amount(money(totalCap) - money(creationCap)), feesIncluded: false, balance: null, shortfall: null } };
 }
 
 export async function openPlan(name, id) {

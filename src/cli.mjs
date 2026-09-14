@@ -14,6 +14,7 @@ const help = `fission — temporary compute for your coding agent
 
 Terminal
   fission                         Open the Rust TUI
+  tmux                            Open the TUI with managed SSH windows (requires tmux)
   help                            Show this command reference
   skill install [--output DIR]    Install the agent skill (default: ~/.agents/skills/fission)
   guide rental|harnesses|reth      Read a bundled workflow guide
@@ -68,6 +69,9 @@ Finish and recover
   reconcile NAME
 
 Terminal controls
+  a                Browse available machines / return to owned machines
+  b / g            Available: show all prices / cycle selected machine regions
+  Enter            Available: open details, then fetch a free 24h quote
   arrows / j / k   Select a machine or scroll receipts
   Enter            Open details, then SSH into a ready VM
   Tab / s          Filter machines / change sorting
@@ -86,8 +90,8 @@ Recipes
 Operation and funding
 Planning fetches quotes before purchase. --cheapest compares up to three
 compatible offers under the configured ceiling. --budget is the workspace
-allocation; network fees are separate. The plan includes funding details for
-an existing authorized Glue policy. AGENTS.md documents the agent workflow,
+allocation; network fees are separate. Plans specify the exact Tempo payment
+token and amount. AGENTS.md documents the agent workflow,
 profile sizing, node readiness, and recovery.
 
 open previews unless --approve is supplied. Creation cap excludes later calls.
@@ -99,7 +103,7 @@ the provider confirms termination. Save work before expiry.
 
 Setup
 Node >=22.13, SSH, the existing Tempo CLI login, and network access are required.
-Build the Rust frontend once with npm run build. Agent commands run through Node.
+Prebuilt releases include the TUI; source installations use npm run setup.
 FISSION_HOME selects the state directory; FISSION_TEMPO selects the Tempo binary.
 `;
 
@@ -152,7 +156,7 @@ async function main() {
   const separator = raw.indexOf("--");
   const tail = separator < 0 ? [] : raw.slice(separator + 1);
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
-    help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" },
+    help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" }, tmux: { type: "boolean" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
@@ -164,7 +168,7 @@ async function main() {
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
   const allowed = {
-    skill: ["output"], guide: [], report: ["log", "notes", "output"], capabilities: [], help: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    skill: ["output"], guide: [], report: ["log", "notes", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
     plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
     prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
@@ -175,7 +179,7 @@ async function main() {
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
@@ -187,7 +191,11 @@ async function main() {
     case "guide": console.log(await (await import("./onboarding.mjs")).guide(name)); break;
     case "report": emit(await (await import("./reports.mjs")).report(name, first, values)); break;
     case "ui": await (await import("./ui.mjs")).ui(); break;
-    case "ssh": process.exitCode = await (await import("./compute.mjs")).connect(name); break;
+    case "tmux": await (await import("./tmux.mjs")).openTmux(); break;
+    case "ssh":
+      if (values.tmux) await (await import("./tmux.mjs")).selectMachine(name);
+      else process.exitCode = await (await import("./compute.mjs")).connect(name);
+      break;
     case "spending": emit(await (await import("./payments.mjs")).spending({ refresh: values.refresh })); break;
     case "machines": {
       const value = await machineOffers(values); emit(value);
