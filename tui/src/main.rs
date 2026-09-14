@@ -965,6 +965,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             if view.confirm.is_none() {
+                if matches!(
+                    key.code,
+                    KeyCode::Char('a' | '1' | '2') | KeyCode::Tab | KeyCode::BackTab
+                ) {
+                    view.storage = false;
+                    view.help = false;
+                }
                 if key.code == KeyCode::Char('o') {
                     view.storage = !view.storage;
                     view.help = false;

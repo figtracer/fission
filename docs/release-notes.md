@@ -1,3 +1,5 @@
+Mouse and keyboard tab navigation now leaves the Storage and Help views consistently.
+
 The selected local storage directory now reaches managed tmux sessions even when a tmux server is already running.
 
 Keep verified build artifacts and prepared Reth execution data in a local directory or mounted drive. The Rust TUI's Storage view shows the location and available space. Dataset collection resumes verified chunks; restored datasets use the pinned writer and a fresh node startup.
