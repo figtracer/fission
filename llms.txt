@@ -8,11 +8,11 @@ For client development, source recipes `foundry-source`, `reth-source`, `tempo-s
 
 `reth-synced` prepares pinned Reth/Lighthouse tools and `/workspace/ethereum`. Size the exact full snapshot before quotes, import it in a separate job, then explicitly start and wait for the pair. Checkpoint selection, disk allowance, candidate compatibility and lease-lived service behavior are detailed in AGENTS.md. Bootstrap readiness means tools prepared; live full-node operation remains unverified.
 
-Humans: `fission ui` for a minimal machine list, history, spending and SSH. Agents: `list --json`, `status --json`, `spending` and the job commands. `spending --refresh` verifies saved payment references through free read-only Tempo RPC calls; missing receipts stay unknown. UI navigation never authorizes a new purchase.
+Humans: `fission` for a minimal machine list, history, spending and SSH. Agents: `list --json`, `status --json`, `spending` and the job commands. `spending --refresh` verifies saved payment references through free read-only Tempo RPC calls; missing receipts stay unknown. UI navigation never authorizes a new purchase.
 
 - [Agent workflow](AGENTS.md): planning, authorization, jobs, readiness, recovery, and cleanup.
-- [Quick start](README.md): available capabilities and current provider limits.
+- [Quick start](README.md): installation and opening the Rust TUI.
 
-Run `fission capabilities` for machine-readable provider/profile availability and `fission --help` for commands. Unavailable profiles are rejected before payment. Use a saved plan and aggregate budget; do not silently downgrade machine requirements.
+Run `fission capabilities` for machine-readable provider/profile availability and `fission help` for commands. Unavailable profiles are rejected before payment. Use a saved plan and aggregate budget; do not silently downgrade machine requirements.
 
 Set a user-authorized VM ceiling with `fission budget --vm-max-spend AMOUNT --approve`. `fission machines --profile reth-source --region ams --duration 24h` returns only affordable compatible quotes and a labeled shortlist average. An average never increases authorization. Full Reth requires at least 32 GiB RAM and 2 TiB disk; source-build offers are not full-node substitutes. No synced deployment is verified yet.

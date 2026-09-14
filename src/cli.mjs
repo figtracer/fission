@@ -10,16 +10,23 @@ import { providers, profiles, createPlan, openPlan, machineOffers } from "./plan
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 
-const help = `fission — temporary workspaces paid with Tempo
+const help = `fission — temporary compute for your coding agent
 
+Terminal
+  fission                         Open the Rust TUI
+  help                            Show this command reference
+  ui                              Open the TUI (alias)
+
+Machines and budgets
   capabilities
-  ui
   ssh NAME
   spending [--refresh]
   machines --profile reth-source --region ams [--max-spend AMOUNT --duration 24h]
     [--cpu N --memory GiB --disk GiB --os linux --arch x86_64 --kind vm]
   budget [--total-spend AMOUNT --approve]
     [--vm-max-spend AMOUNT --profile PROFILE --approve]
+
+Planning and preparation
   plan NAME --recipe linux|foundry|reth|tempo|FILE --duration 2h
     --max-spend 1 --total-spend 2 [--profile runtime|foundry-source|reth-source|
     reth-synced|tempo-source|tempo-node]
@@ -33,20 +40,49 @@ const help = `fission — temporary workspaces paid with Tempo
     reth-synced prepares /workspace/ethereum; snapshot import and sync are separate jobs.
   open NAME --plan ID --approve
   prepare NAME
+  recipes
+  open NAME --recipe linux|reth|FILE --duration 2h --max-spend 1 [--approve]
+
+Jobs
   run NAME JOB --duration 10m -- COMMAND [ARG...]
   jobs NAME
   job NAME JOB [--refresh]
   wait NAME JOB --duration 5m --max-spend 0.01
-  recipes
-  open NAME --recipe linux|reth|FILE --duration 2h --max-spend 1 [--approve]
+
+Observe and collect
   list [--json]
   status NAME [--refresh] [--json]
   watch [--refresh --max-spend 0.01]
   exec NAME -- COMMAND [ARG...]
   upload NAME LOCAL_FILE /remote/file
   download NAME /remote/file LOCAL_FILE
+
+Finish and recover
   close NAME [--output NEW_DIRECTORY | --discard-output]
   reconcile NAME
+
+Terminal controls
+  arrows / j / k   Select a machine or scroll receipts
+  Enter            Open details, then SSH into a ready VM
+  Tab / s          Filter machines / change sorting
+  r / v            Reload local state / verify payment receipts
+  p                Check the selected provider (uses its request cap)
+  x                Confirm, save declared files, and close the selected machine
+  Esc / q          Back / quit the interface; machines retain their leases
+
+Recipes
+  linux, foundry, reth, tempo      Shell, tools, and local development chains
+  foundry-source, reth-source,
+  tempo-source                    Source checkout and /workspace/build
+  reth-synced                      Reth/Lighthouse snapshot and node controller
+  Use fission recipes and fission capabilities for structured details.
+
+Operation and funding
+Planning fetches quotes before purchase. --cheapest compares up to three
+compatible offers under the configured ceiling. --budget is the workspace
+allocation; network fees are separate. The plan includes funding details for
+an existing authorized Glue policy. AGENTS.md documents the agent workflow,
+profile sizing, node readiness, and recovery.
 
 open previews unless --approve is supplied. Creation cap excludes later calls.
 Modal exec/status/terminate cost at most ${operationCap} USDC.e per request.
@@ -55,7 +91,9 @@ File transfers use multiple requests. watch stays local unless --refresh is set.
 Ctrl-C stops watching, not the remote workspace. Deadlines are estimates until
 the provider confirms termination. Save work before expiry.
 
-Node >=22.13, the existing Tempo CLI login, and network access are required.
+Setup
+Node >=22.13, SSH, the existing Tempo CLI login, and network access are required.
+Build the Rust frontend once with npm run build. Agent commands run through Node.
 FISSION_HOME selects the state directory; FISSION_TEMPO selects the Tempo binary.
 `;
 
@@ -95,7 +133,7 @@ function table(states) {
     const end = done ? Date.parse(state.closedAt || state.observedAt) : now;
     rows.push([state.name, state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left) + (state.providerExpiresAt ? "" : " (est.)"), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
   }
-  if (rows.length === 1) return "No saved workspaces. Use fission open --help.";
+  if (rows.length === 1) return "No saved workspaces. Run fission help to get started.";
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => safeText(row[i]).length)));
   return rows.map((row) => row.map((cell, i) => safeText(cell).padEnd(widths[i])).join("  ")).join("\n");
 }
@@ -112,10 +150,12 @@ async function main() {
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
     recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
   } });
+  if (values.help) { console.log(help); return; }
+  if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
-  if (!command || values.help) { console.log(help); return; }
+  if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
   const allowed = {
-    capabilities: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    capabilities: [], help: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
     plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
     prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
@@ -126,11 +166,12 @@ async function main() {
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { capabilities: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { capabilities: 1, help: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
+    case "help": console.log(help); break;
     case "ui": await (await import("./ui.mjs")).ui(); break;
     case "ssh": process.exitCode = await (await import("./compute.mjs")).connect(name); break;
     case "spending": emit(await (await import("./payments.mjs")).spending({ refresh: values.refresh })); break;
@@ -158,7 +199,7 @@ async function main() {
       break;
     }
     case "recipes":
-      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for separate full mainnet snapshot import and sync jobs; live synced deployment unverified", profile: "reth-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
+      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for full mainnet snapshot import and sync jobs", profile: "reth-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
         ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
       break;
     case "open": {

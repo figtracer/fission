@@ -5,3 +5,4 @@ node_modules/
 .loaner/
 .fission/
 outputs/
+tui/target/

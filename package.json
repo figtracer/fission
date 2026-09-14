@@ -2,8 +2,15 @@
   "name": "fission",
   "version": "0.1.0",
   "private": true,
-  "description": "Temporary workspaces for occasional agent tasks, paid with Tempo.",
+  "description": "Temporary compute for your coding agent.",
   "type": "module",
-  "bin": { "fission": "src/cli.mjs" },
-  "engines": { "node": ">=22.13.0" }
+  "bin": {
+    "fission": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "cargo build --manifest-path tui/Cargo.toml --release --locked"
+  }
 }
