@@ -203,7 +203,7 @@ def start(args):
     attempt_id = str(uuid.uuid4())
     unit_names = ['fission-reth-' + attempt_id, 'fission-lighthouse-' + attempt_id]
     commands = [
-        [str(candidate), 'node', '--chain', 'mainnet', '--full', '--datadir', str(ROOT / 'execution'), '--http', '--http.addr', '127.0.0.1', '--http.api', 'eth,net,web3', '--authrpc.addr', '127.0.0.1', '--authrpc.jwtsecret', str(jwt), '--port', '30303'],
+        [str(candidate), 'node', '--chain', 'mainnet', '--full', '--datadir', str(ROOT / 'execution'), '--ipcpath', str(ROOT / 'execution.ipc'), '--http', '--http.addr', '127.0.0.1', '--http.api', 'eth,net,web3', '--authrpc.addr', '127.0.0.1', '--authrpc.jwtsecret', str(jwt), '--port', '30303'],
         [str(LIGHTHOUSE), 'bn', '--network', 'mainnet', '--datadir', str(ROOT / 'consensus'), '--execution-endpoint', 'http://127.0.0.1:8551', '--execution-jwt', str(jwt), '--checkpoint-sync-url', args.checkpoint_url, '--wss-checkpoint', args.checkpoint, '--http', '--http-address', '127.0.0.1', '--http-port', '5052', '--port', '9000'],
     ]
     attempt = {'id': attempt_id, 'phase': 'startup_unknown', 'startedAt': time.time(), 'units': unit_names, 'commands': commands,
@@ -231,7 +231,9 @@ def observe(max_age):
     active = all(unit.get('ActiveState') == 'active' for unit in state.values())
     result = {'ready': False, 'attempt': attempt['id'], 'phase': attempt['phase'], 'units': state, 'observedAt': time.time()}
     if active:
-        probe = subprocess.run(['python3', str(OBSERVER), '--chain-id', '1', '--mainnet-pair', '--max-head-age', str(max_age)], capture_output=True, text=True, check=False)
+        execution = attempt['commands'][0]
+        ipc = execution[execution.index('--ipcpath') + 1] if '--ipcpath' in execution else '/tmp/reth.ipc'
+        probe = subprocess.run(['python3', str(OBSERVER), '--chain-id', '1', '--mainnet-pair', '--execution-ipc', ipc, '--max-head-age', str(max_age)], capture_output=True, text=True, check=False)
         result['readiness'] = json.loads(probe.stdout)
         after = units(attempt)
         latest = read(current)

@@ -1,3 +1,5 @@
+Pruned full Reth snapshots now verify execution genesis through local IPC network identity. The controller records its IPC path, and readiness retains mainnet identity, canonical payload, peer, sync, and head freshness checks. RPC failures include their parameters and server error.
+
 Storage output names Fission's own storage fee explicitly (`fissionStorageCharge`, replacing `recurringStorageCharge`). User-mounted storage retains its own billing.
 
 Mouse and keyboard tab navigation now leaves the Storage and Help views consistently.

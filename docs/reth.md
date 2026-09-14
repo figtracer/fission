@@ -32,7 +32,7 @@ Select a recent mainnet checkpoint and independently verify its block root and e
 /workspace/ethereum start --checkpoint-url TRUSTED_HTTPS_URL --checkpoint BLOCK_ROOT:EPOCH --max-head-age SECONDS
 ```
 
-The controller records intent before starting owned systemd units. Readiness requires two fresh observations with an advancing, canonical consensus execution payload, matching genesis identities, connected peers, and non-optimistic online execution. Treat readiness as a timestamped observation. Peer counts alone do not establish inbound reachability or historical consensus backfill.
+The controller records intent before starting owned systemd units. Readiness requires two fresh observations with an advancing, canonical consensus execution payload, matching genesis identities (execution network identity comes from local IPC so pruned block zero is supported), connected peers, and non-optimistic online execution. Treat readiness as a timestamped observation. Peer counts alone do not establish inbound reachability or historical consensus backfill.
 
 `status --max-head-age SECONDS` checks the pair; `wait` with the same flag observes until ready. A startup/wait timeout stops the observer while services remain bounded by the lease. `stop` stops and verifies both owned service cgroups. `restart` takes the same checkpoint/readiness flags and stops the previous pair before recording a new invocation.
 
