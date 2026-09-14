@@ -134,6 +134,10 @@ export async function createPlan(name, options) {
   const previous = await readJSON(join(directory(name), "state.json"));
   if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
   options = { ...options, provider: providerId(options.provider) };
+  if (options.recipe === "reth-synced") {
+    if (options.profile && options.profile !== "reth-synced") throw new Error("The synced-node recipe requires its matching profile.");
+    options.profile = "reth-synced";
+  }
   if (Object.hasOwn(sourceRecipes, options.recipe)) {
     if (options.profile && options.profile !== options.recipe) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
     if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");

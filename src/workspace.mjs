@@ -17,13 +17,25 @@ export const sourceRecipes = {
 };
 
 export async function recipe(input = "linux") {
-  const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
-  const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
-  const value = binaries ? {
-    name: input, description: "Prepare Rust 1.95.0 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
-    afterCheckout: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare',*sys.argv[2:]],check=True)", await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8"), ...binaries]],
-    readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
-  } : JSON.parse(await readFile(file, "utf8"));
+  let value;
+  if (input === "reth-synced") {
+    const files = {};
+    for (const name of ["ethereum-node.py", "ethereum-ready.py"])
+      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
+    value = { name: input, description: "Prepare pinned Reth/Lighthouse tools for an explicit full mainnet snapshot and node workflow. Bootstrap does not import data or start nodes.",
+      prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
+        ["python3", "/workspace/.fission/ethereum-node.py", "install"]],
+      readiness: [["/workspace/.fission/clients/reth-2.5.2", "--version"], ["/workspace/.fission/clients/lighthouse-8.2.2", "--version"]],
+      artifacts: ["/workspace/ethereum-tools.json"] };
+  } else {
+    const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
+    const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
+    value = binaries ? {
+      name: input, description: "Prepare Rust 1.95.0 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
+      afterCheckout: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare',*sys.argv[2:]],check=True)", await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8"), ...binaries]],
+      readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
+    } : JSON.parse(await readFile(file, "utf8"));
+  }
   if (typeof value.name !== "string" || !Array.isArray(value.prepare) || !Array.isArray(value.artifacts))
     throw new Error("Recipe requires name, prepare argv arrays, and artifact paths.");
   if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts", "readiness", "afterCheckout"].includes(key)))
@@ -52,6 +64,7 @@ export function duration(text) {
 }
 
 export async function plan(name, options) {
+  if (options.recipe === "reth-synced") throw new Error("The synced-node recipe requires capability matching through a saved plan.");
   directory(name);
   if (await readJSON(join(directory(name), "state.json")))
     throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");
@@ -209,9 +222,9 @@ export async function active(name, requireReady = true) {
 export async function upload(state, local, remote) {
   remotePath(remote);
   const bytes = await readFile(resolve(local));
-  // The payment gateway rejected 48 KiB request chunks. Keep payloads small
-  // enough for its payment-challenge headers as well as the JSON body.
-  const chunkBytes = 4 * 1024;
+  // SSH accepts 48 KiB chunks; the paid gateway rejected that size because
+  // its payment-challenge headers also carry request data.
+  const chunkBytes = (providerId(state.provider) === "compute-mpp" ? 48 : 4) * 1024;
   const temp = remote + ".fission-" + randomUUID();
   const script = "import sys,base64,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
   for (let offset = 0; offset < Math.max(bytes.length, 1); offset += chunkBytes) {

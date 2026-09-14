@@ -6,6 +6,8 @@ Start with `fission plan NAME --recipe foundry --cheapest --budget AMOUNT --regi
 
 For client development, source recipes `foundry-source`, `reth-source`, `tempo-source` require `--repo URL --ref FULL_COMMIT` and enforce matching hardware floors. Bootstrap prepares Rust and dependencies; `run NAME build --duration 1h -- /workspace/build` compiles as a separate job. Download `/workspace/build.json` for binary provenance. Source recipes start no node; a successful compile does not establish network readiness.
 
+`reth-synced` prepares pinned Reth/Lighthouse tools and `/workspace/ethereum`. Size the exact full snapshot before quotes, import it in a separate job, then explicitly start and wait for the pair. Checkpoint selection, disk allowance, candidate compatibility and lease-lived service behavior are detailed in AGENTS.md. Bootstrap readiness means tools prepared; live full-node operation remains unverified.
+
 Humans: `fission ui` for a minimal machine list, history, spending and SSH. Agents: `list --json`, `status --json`, `spending` and the job commands. `spending --refresh` verifies saved payment references through free read-only Tempo RPC calls; missing receipts stay unknown. UI navigation never authorizes a new purchase.
 
 - [Agent workflow](AGENTS.md): planning, authorization, jobs, readiness, recovery, and cleanup.

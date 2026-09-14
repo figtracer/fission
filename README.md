@@ -22,6 +22,8 @@ fission close change --output ./saved-change
 
 Give your agent [AGENTS.md](AGENTS.md) or [llms.txt](llms.txt). Recipes cover Foundry tools and isolated Reth/Tempo development chains. For client development, use `foundry-source`, `reth-source` or `tempo-source` with `--repo URL --ref FULL_COMMIT`. Bootstrap prepares Rust and dependencies; `/workspace/build` runs compilation as a separate job.
 
+`reth-synced` prepares a Reth/Lighthouse controller for separate snapshot import, startup, readiness and candidate-restart jobs. It requires full-node capacity; live synced deployment remains unverified.
+
 **Available:** Linux x86 VMs through MPP-funded Vultr, prepaid for 24 hours, with SSH and provider expiry. Modal supplies shorter Linux sandboxes with opportunistic capacity. Full-VM source compilation and synced Reth/Lighthouse deployment remain unverified. Full Reth retains its 32 GiB RAM and 2 TiB disk floor; no affordable compatible offer is verified.
 
 **Budgets:** planning pays nothing. `--cheapest` compares up to three compatible quotes from one provider; `machines` shows the sample and average. `--budget` covers the workspace allocation, with creation capped at its saved quote. Price increases stop purchase. Hardware floors and spending ceilings remain binding; network fees are separate. Closed allocations and failed request caps stay in the ledger.
