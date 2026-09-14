@@ -55,7 +55,7 @@ export async function quote(operation, body, provider = "modal-tempo") {
 }
 
 export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
-  state = { ...state, provider: providerId(state.provider) };
+  state.provider = providerId(state.provider);
   if (state.provider === "compute-mpp" && operation !== "create")
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
   const dir = join(directory(state.name), "requests");
