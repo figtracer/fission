@@ -105,7 +105,7 @@ function summary(state) {
     deadlineEstimate: state.deadlineEstimate, observedAt: state.observedAt,
     providerExpiresAt: state.providerExpiresAt,
     closedAt: state.closedAt,
-    remoteStatus: state.remoteStatus, exportedTo: state.exportedTo,
+    remoteStatus: state.remoteStatus, providerStatus: state.providerStatus, resizePending: state.resizePending, observedResources: state.observedResources, exportedTo: state.exportedTo,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, source: state.source, planId: state.id,
   };
@@ -131,7 +131,7 @@ function table(states) {
     const done = ["terminated", "expired"].includes(state.phase);
     const left = Date.parse(state.providerExpiresAt || state.deadlineEstimate) - now;
     const end = done ? Date.parse(state.closedAt || state.observedAt) : now;
-    rows.push([state.name, state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left) + (state.providerExpiresAt ? "" : " (est.)"), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
+    rows.push([state.name, !done && state.resizePending ? "resizing" : state.phase, time(end - Date.parse(state.requestedAt)), done ? "closed" : left <= 0 ? "confirm expiry" : time(left) + (state.providerExpiresAt ? "" : " (est.)"), state.observedAt ? time(now - Date.parse(state.observedAt)) + " ago" : "not checked"]);
   }
   if (rows.length === 1) return "No saved workspaces. Run fission help to get started.";
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => safeText(row[i]).length)));

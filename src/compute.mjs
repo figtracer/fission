@@ -79,7 +79,7 @@ export async function connect(name, options = {}) {
   const terminate = () => controller.abort();
   process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
   try {
-    let state = await active(name);
+    let state = await active(name, false);
     if (state.provider !== "compute-mpp") throw new Error("This provider has no SSH access. Use run/exec for its sandbox.");
     await refresh(name, { signal });
     state = await active(name);
@@ -136,8 +136,13 @@ export async function computeRequest(state, operation, body, id, options) {
       const order = response.order || response.instance || response;
       if (!order || order.id !== state.remoteId) throw new Error("Unrecognized compute instance response.");
       if (usableIP(order.ip_address)) state.sshHost = order.ip_address;
-      if (Number.isFinite(Date.parse(order.expires_at))) state.providerExpiresAt = order.expires_at;
+      const pending = order.metadata?.resize_pending;
+      state.resizePending = Boolean(pending);
+      const expiries = [order.expires_at, pending?.new_expires_at, pending ? state.providerExpiresAt : undefined].filter((value) => Number.isFinite(Date.parse(value)));
+      if (expiries.length) state.providerExpiresAt = expiries.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       state.providerStatus = order.status;
+      if ([order.vultr_vcpu_count, order.vultr_ram, order.vultr_disk].every((value) => Number.isFinite(value) && value > 0))
+        state.observedResources = { cpu: order.vultr_vcpu_count, memoryGiB: order.vultr_ram / 1024, diskGiB: order.vultr_disk * 1e9 / 2 ** 30 };
       await save(state);
       if (["destroyed", "terminated"].includes(order.status)) result = { status: "terminated" };
       else if (["active", "pending", "provisioning", "running"].includes(order.status)) result = { status: "running" };

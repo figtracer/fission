@@ -31,13 +31,14 @@ async function main() {
     const paid = report.unknownWorkspaces?.includes(state.name) || !transactions.length ||
       transactions.some((item) => item.paid === null || item.workspaces.length !== 1) ? null :
       transactions.reduce((sum, item) => sum + units(item.paid), 0n);
+    const capacity = state.observedResources || state.capabilities;
     const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
     return {
-      name: state.name, phase: state.phase, provider: state.provider, finished,
-      ssh: state.provider === "compute-mpp" && state.phase === "ready",
+      name: state.name, phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, finished,
+      ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
       requested: state.requestedAt || "", expiry: Math.floor(Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000) || null,
       estimated: !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
-      capacity: state.capabilities?.cpu ? `${state.capabilities.cpu} vCPU / ${state.capabilities.memoryGiB} GiB RAM / ${Math.floor(state.capabilities.diskGiB)} GiB disk` : "unreserved sandbox",
+      capacity: capacity?.cpu ? `${capacity.cpu} vCPU / ${capacity.memoryGiB} GiB RAM / ${Math.floor(capacity.diskGiB)} GiB disk` : "unreserved sandbox",
       started: date(state.requestedAt), ended: date(finished ? state.closedAt : state.providerExpiresAt || state.deadlineEstimate),
       cap: money(state.totalCap), quote: money(state.creationQuote), exported: state.exportedTo || "",
       checkCap: state.provider === "compute-mpp" ? "0" : operationCap,

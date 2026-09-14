@@ -216,6 +216,8 @@ export async function active(name, requireReady = true) {
   const state = await load(name);
   if (!state.remoteId || terminal(state) || ["termination_unknown", "closing"].includes(state.phase))
     throw new Error(`Workspace is ${state.phase}; inspect status before executing work.`);
+  if (requireReady && state.resizePending)
+    throw new Error("Provider resize is pending. Observe with status --refresh before submitting work.");
   if (requireReady && (state.asyncPreparation || state.bootstrapJob) && state.phase !== "ready")
     throw new Error("Bootstrap is not ready. Inspect its job before submitting work.");
   // The local deadline is informational; only the provider knows actual expiry.
