@@ -6,3 +6,4 @@ node_modules/
 .fission/
 outputs/
 tui/target/
+/fission/

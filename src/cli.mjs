@@ -15,6 +15,8 @@ const help = `fission — temporary compute for your coding agent
 Terminal
   fission                         Open the Rust TUI
   help                            Show this command reference
+  skill install [--output DIR]    Install the agent skill (default: ~/.agents/skills/fission)
+  guide rental|harnesses|reth      Read a bundled workflow guide
   ui                              Open the TUI (alias)
 
 Machines and budgets
@@ -52,6 +54,8 @@ Jobs
   wait NAME JOB --duration 5m --max-spend 0.01
 
 Observe and collect
+  report NAME [JOB] [--log FILE --notes FILE --output DIR]
+    Save a timestamped Markdown report and structured record under fission/NAME.
   list [--json]
   status NAME [--refresh] [--json]
   watch [--refresh --max-spend 0.01]
@@ -153,14 +157,14 @@ async function main() {
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
-    recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
+    log: { type: "string" }, notes: { type: "string" }, recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
   } });
   if (values.help) { console.log(help); return; }
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
   const allowed = {
-    capabilities: [], help: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    skill: ["output"], guide: [], report: ["log", "notes", "output"], capabilities: [], help: [], ui: [], ssh: [], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
     plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
     prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
@@ -171,12 +175,17 @@ async function main() {
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { capabilities: 1, help: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
     case "help": console.log(help); break;
+    case "skill":
+      if (name !== "install") throw new Error("Use fission skill install.");
+      emit(await (await import("./onboarding.mjs")).installSkill(values.output)); break;
+    case "guide": console.log(await (await import("./onboarding.mjs")).guide(name)); break;
+    case "report": emit(await (await import("./reports.mjs")).report(name, first, values)); break;
     case "ui": await (await import("./ui.mjs")).ui(); break;
     case "ssh": process.exitCode = await (await import("./compute.mjs")).connect(name); break;
     case "spending": emit(await (await import("./payments.mjs")).spending({ refresh: values.refresh })); break;

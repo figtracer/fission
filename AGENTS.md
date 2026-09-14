@@ -4,7 +4,7 @@ Rent temporary compute for a specific task, prepare its environment, run the wor
 
 ## Entry points
 
-Use `fission help` for syntax, `fission capabilities` for profiles, and `fission list --json` for saved machines. Agents use CLI results; bare `fission` opens the human-facing Rust TUI.
+Use the bundled [Fission skill](skills/fission/SKILL.md) for change-validation tasks and standardized reports. Use `fission help` for syntax, `fission capabilities` for profiles, and `fission list --json` for saved machines. Agents use CLI results; bare `fission` opens the human-facing Rust TUI.
 
 Read the guide that matches the operation:
 

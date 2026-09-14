@@ -41,6 +41,12 @@ Download the returned log path and required outputs with `fission download NAME 
 
 `fission close NAME --output NEW_DIRECTORY` saves recipe-declared files and bootstrap output, then terminates. Download arbitrary job outputs separately. Use `--discard-output` when remaining files can be discarded. Confirm the returned termination state; an export failure leaves the VM subject to its lease.
 
+## Run reports
+
+Save job logs and required artifacts before closing the machine. After cleanup, run `fission report NAME JOB --log LOCAL_LOG --notes ASSESSMENT.md` from the user's project. The report folder is `fission/NAME/<UTC timestamp>-JOB/`; `--output DIR` changes its root. It contains `run.md`, structured `run.json`, and the attached `output.log`. Additional evidence can be copied beside them and linked from the assessment.
+
+Reports use saved observations and receipt verification already on disk; they make no provider requests. They show unknown timing, spending, or cleanup explicitly. The attached log is identified as an operator-supplied local artifact with its size and hash. Use the skill's Outcome, Measurements, Interpretation, and Limitations headings for the agent assessment. A workspace report without `JOB` also records failures before a job could start. Existing reports are preserved; each invocation creates a timestamped folder.
+
 ## Recovery
 
 Preserve uncertain records. `fission reconcile NAME` recovers saved creation responses and observes the same resource. A missing remote ID needs provider/payment investigation. `termination_unknown` needs a fresh provider observation before another close or a cleanup claim. A launch marker without a running/completed supervisor remains unresolved; inspect the recorded job rather than submitting an equivalent one.

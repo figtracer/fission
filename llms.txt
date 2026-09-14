@@ -2,6 +2,7 @@
 
 > Temporary compute for your coding agent, paid through MPP with Tempo.
 
+- [Agent skill](skills/fission/SKILL.md): validate a change, collect evidence, and return a timestamped report.
 - [Agent entry point](AGENTS.md): task completion, authorization, and repository boundaries.
 - [Rental](docs/rental.md): quotes, budgets, Glue funding, jobs, exports, and recovery.
 - [Harnesses](docs/harnesses.md): Foundry, Reth, Tempo, source builds, and custom recipes.
