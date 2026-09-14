@@ -12,7 +12,7 @@ reth download --chain mainnet --manifest-path FILE --full --print-plan-json --qu
 
 Record the binary, manifest digest, preset, and invocation outside the repo; the output omits the preset name. Add `totalDownloadSize` and `totalOutputSize`, plus an explicit allowance for consensus, growth, builds, OS/filesystem, and extraction. Round upward to GiB and pass `--disk GiB` to discovery and planning. This conservative coexistence envelope supplements the profile floor. Archive needs its own sizing; minimal is a different workload requiring an explicit choice.
 
-Budget lease time for preparation, transfer, extraction, syncing, the requested work, and export. Verify actual guest resources and free space before import.
+Budget lease time for preparation, transfer, extraction, index reconstruction, syncing, the requested work, and export. The full preset can omit indexes that Reth rebuilds on first startup; completed extraction does not establish node readiness. Verify actual guest resources and free space before import.
 
 ## Import
 
