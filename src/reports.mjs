@@ -61,7 +61,7 @@ export async function report(name, id, options = {}) {
       durationSeconds: startedAt && finishedAt && finishedAt >= startedAt ? (Date.parse(finishedAt) - Date.parse(startedAt)) / 1000 : null,
       exitCode: job.observation?.returncode ?? null, error: job.observation?.error ?? null,
       observedAt: job.observedAt, deadline: iso(job.spec?.deadline), digest: job.digest,
-      commands: id === state.bootstrapJob ? null : job.spec?.commands,
+      commands: id === state.bootstrapJob || id === state.repairJob ? null : job.spec?.commands,
       readinessChecks: job.observation?.checks ?? null, environment: job.observation?.environment ?? null, remoteLog: job.log } : null,
     spending: { currency: payments.currency, allocation: state.totalCap ?? null, creationQuote: state.creationQuote,
       verifiedOutflow: unknown ? null : amount(transactions.reduce((sum, transaction) => sum + units(transaction.paid), 0n)),
@@ -84,7 +84,7 @@ export async function report(name, id, options = {}) {
   }
   const observedSource = job?.observation?.environment?.source;
   const sourceReproducible = !state.source || observedSource?.clean === true && /^[a-f0-9]{40}$/.test(observedSource.commit);
-  const replayable = recipeVerified && sourceReproducible && job && id !== state.bootstrapJob && job.spec?.commands?.length;
+  const replayable = recipeVerified && sourceReproducible && job && id !== state.bootstrapJob && id !== state.repairJob && job.spec?.commands?.length;
   const rows = [
     ["Generated (UTC)", generatedAt], ["Requested (UTC)", state.requestedAt], ["Machine", name], ["Provider", state.provider],
     ["Recipe", state.recipe.name], ["Run", id || "Workspace"], ["Recorded result", job?.phase || state.phase],

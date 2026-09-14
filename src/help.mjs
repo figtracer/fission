@@ -147,6 +147,16 @@ Usage: fission prepare NAME [--duration SHORTER_REMAINING_MINIMUM]
 Observes an existing resize and starts bootstrap once when capacity/time gates
 pass. --duration explicitly accepts a shorter remaining window after resize;
 it never extends the lease or repeats payment. Returns JSON.`,
+  repair: `Resume a confirmed failed bootstrap command once, after inspection.
+
+Usage: fission repair NAME --duration DURATION --approve
+
+Inspect the saved bootstrap spec and failure log first. --approve confirms that
+repeating the failed command is safe despite any partial side effects. Resumes
+that step onward in a distinct repair job with the original readiness checks.
+Rejects unknown launches, timeouts, supervisor errors, and a recorded repair.
+No new rental or bootstrap replay. Observe job NAME repair; download its log
+separately before close. Returns JSON. See fission help rental/recovery.`,
   run: `Submit a bounded job once, using a distinct job name.
 
 Usage: fission run NAME JOB --duration DURATION -- COMMAND [ARG...]
@@ -327,7 +337,7 @@ export async function help(parts = []) {
     const groups = {
       "Discover and plan": ["capabilities", "recipes", "machines", "budget", "spending", "plan", "open", "prepare"],
       "Run and observe": ["run", "jobs", "job", "wait", "check", "list", "status", "watch", "ssh", "exec"],
-      "Collect and finish": ["upload", "download", "report", "storage", "cache", "dataset", "close", "reconcile"],
+      "Collect and finish": ["upload", "download", "report", "storage", "cache", "dataset", "close", "reconcile", "repair"],
       "Terminal and help": ["tmux", "skill", "help"],
     };
     return `fission — temporary compute for your coding agent

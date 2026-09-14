@@ -62,7 +62,7 @@ export async function getJob(name, id, refresh = false, options = {}) {
     if (!job) throw new Error("Unknown job.");
     if (!refresh) return job;
     const state = await load(name);
-    const updatesPreparation = id === state.bootstrapJob && !terminal(state) && !["termination_unknown", "closing"].includes(state.phase);
+    const updatesPreparation = id === (state.repairJob ?? state.bootstrapJob) && !terminal(state) && !["termination_unknown", "closing"].includes(state.phase);
     if (jobDone(job)) {
       if (updatesPreparation) {
         state.phase = job.phase === "succeeded" ? "ready" : "prepare_failed";

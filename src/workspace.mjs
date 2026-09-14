@@ -189,6 +189,29 @@ export const prepare = (name, remaining) => locked(name, async () => {
   return prepareState(state);
 });
 
+export const repair = (name, seconds) => locked(name, async () => {
+  const state = await active(name, false);
+  if (state.repairJob) throw new Error("Repair already recorded. Observe its existing job; do not launch it again.");
+  if (state.resizePending || state.phase !== "prepare_failed" || !state.bootstrapJob)
+    throw new Error("Repair requires a completed failed bootstrap with no pending resize.");
+  const { getJob, launch } = await import("./jobs.mjs");
+  const bootstrap = await getJob(name, state.bootstrapJob);
+  const step = bootstrap.observation?.step;
+  // A timeout or supervisor error does not identify a safely completed failing
+  // command. Only an observed nonzero command exit permits explicit repair.
+  if (bootstrap.phase !== "failed" || !Number.isInteger(bootstrap.observation?.returncode) || bootstrap.observation.returncode === 0 ||
+      !Number.isSafeInteger(step) || step < 0 || step >= bootstrap.spec.commands.length)
+    throw new Error("Repair requires an observed bootstrap command failure, not an unknown launch, timeout, or supervisor error.");
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > state.durationSeconds ||
+      Date.parse(state.providerExpiresAt || state.deadlineEstimate) <= Date.now())
+    throw new Error("Repair duration must fit a workspace with remaining lease time.");
+  state.repairJob = "repair";
+  state.phase = "preparing";
+  await save(state);
+  await launch(state, state.repairJob, bootstrap.spec.commands.slice(step), seconds, bootstrap.spec.readiness, bootstrap.spec.cwd);
+  return state;
+});
+
 async function refreshState(state, options) {
   if (!state.remoteId) throw new Error("No remote ID yet. Run reconcile to recover the saved create response.");
   const response = await request(state, "status", { sandbox_id: state.remoteId }, operationCap, undefined, options);
