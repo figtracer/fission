@@ -2,6 +2,8 @@
 import json
 import os
 import pathlib
+import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,6 +41,17 @@ def run(command, log):
 
 
 try:
+    source = pathlib.Path('/workspace/source')
+    environment = {'platform': platform.platform(), 'architecture': platform.machine(), 'cpu': os.cpu_count(),
+                   'diskFreeBytes': shutil.disk_usage(spec['cwd']).free, 'source': None}
+    if (source / '.git').exists():
+        try:
+            commit = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True, timeout=5).strip()
+            changes = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True, timeout=5)
+            environment['source'] = {'commit': commit, 'clean': not changes, 'changes': changes}
+        except Exception as error:
+            environment['source'] = {'error': str(error)}
+    state['environment'] = environment
     save()
     with (root / "output.log").open("ab", buffering=0) as log:
         for index, command in enumerate(spec["commands"]):

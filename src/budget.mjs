@@ -9,7 +9,7 @@ export function units(value) {
 }
 export const amount = (value) => `${value / 1000000n}.${String(value % 1000000n).padStart(6, "0")}`;
 const path = join(root, ".budget.json");
-const lock = (fn) => fileLocked(join(root, ".budget.lock"), fn);
+const lock = (fn, waitMs = 0) => fileLocked(join(root, ".budget.lock"), fn, waitMs);
 // Two gateway calls remain available for a termination and its confirmation.
 const terminationReserve = 200n;
 export class BudgetRejected extends Error {}
@@ -72,6 +72,18 @@ export async function hasTerminationReservation(state) {
 }
 
 export async function reserve(state, operation, maximum, id) {
+  if (operation === "exec" && units(maximum) === 0n) {
+    const ledger = await readJSON(path);
+    if (ledger?.requests[id]) throw new Error("Payment already reserved. Reconcile; never resubmit this request.");
+    const allocated = ledger?.allocations[state.name];
+    if (allocated && units(state.totalCap || allocated) === units(allocated)) {
+      // Free SSH chunks retain their per-workspace request journal. They add no
+      // liability, so avoid rewriting an ever-growing monetary ledger per chunk.
+      return;
+    }
+  }
+  // Concurrent VM requests serialize their short local reservation writes.
+  // Five seconds bounds contention without treating an abandoned lock as free.
   return lock(async () => {
     const ledger = await readJSON(path);
     if (!ledger && !state.totalCap) return; // Existing creation-only workflows remain compatible.
@@ -96,5 +108,5 @@ export async function reserve(state, operation, maximum, id) {
     if (used + units(maximum) + reserveForClose > units(cap)) throw new Error("Workspace budget exhausted; termination reserve is protected.");
     ledger.requests[id] = { name: state.name, operation, maximum, reservedAt: new Date().toISOString() };
     await writeJSON(path, ledger);
-  });
+  }, 5000);
 }

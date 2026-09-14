@@ -3,6 +3,7 @@ import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 // Keep existing budgets and unresolved machines attached after the product rename.
 const legacyRoot = join(homedir(), ".local/state/loaner");
@@ -58,14 +59,19 @@ export async function list() {
 
 export const locked = (name, action) => fileLocked(join(directory(name), "operation.lock"), action);
 
-export async function fileLocked(path, action) {
+export async function fileLocked(path, action, waitMs = 0) {
   const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true, mode: 0o700 });
   let file;
-  try { file = await open(path, "wx", 0o600); }
-  catch (error) {
-    if (error.code !== "EEXIST") throw error;
-    throw new Error(`Operation lock exists: ${path}. Check its PID; after that process exits, remove only the lock and run reconcile. Keep all other state.`);
+  const deadline = Date.now() + waitMs;
+  while (!file) {
+    try { file = await open(path, "wx", 0o600); }
+    catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline)
+        throw new Error(`Operation lock exists: ${path}. Check its PID; after that process exits, remove only the lock and run reconcile. Keep all other state.`);
+      await delay(Math.min(25, deadline - Date.now()));
+    }
   }
   await file.writeFile(JSON.stringify({ pid: process.pid }));
   await file.close();

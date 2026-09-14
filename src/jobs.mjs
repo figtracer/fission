@@ -25,7 +25,8 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000);
   if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("Insufficient estimated lease time for a new job.");
   const spec = { id, commands, readiness, cwd, deadline, pollSeconds: 15 };
-  const job = { id, name: state.name, phase: "launch_unknown", requestId: randomUUID(), spec, digest: createHash("sha256").update(JSON.stringify(spec)).digest("hex"), log: `${remotePath(id)}/output.log` };
+  const runnerBytes = await readFile(runner);
+  const job = { runnerSha256: createHash("sha256").update(runnerBytes).digest("hex"), id, name: state.name, phase: "launch_unknown", requestId: randomUUID(), spec, digest: createHash("sha256").update(JSON.stringify(spec)).digest("hex"), log: `${remotePath(id)}/output.log` };
   await writeJSON(file, job);
   const script = `import sys,json,pathlib,base64,subprocess,os
 p=pathlib.Path(sys.argv[1]); p.mkdir(parents=True,exist_ok=False)
@@ -36,7 +37,7 @@ os.chmod(p,0o700)
 log=(p/'supervisor.log').open('ab')
 subprocess.Popen(['python3',str(p/'runner.py'),str(p)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
 print(json.dumps({'id':p.name,'phase':'submitted'}))`;
-  const result = await execute(state, ["python3", "-c", script, remotePath(id), JSON.stringify(spec), (await readFile(runner)).toString("base64")], operationCap, job.requestId);
+  const result = await execute(state, ["python3", "-c", script, remotePath(id), JSON.stringify(spec), runnerBytes.toString("base64")], operationCap, job.requestId);
   if (result.returncode !== 0) throw new Error(`Job launch unresolved. Inspect job ${id} before doing anything else.`);
   job.phase = "submitted";
   await writeJSON(file, job);

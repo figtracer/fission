@@ -6,6 +6,7 @@ import { spending } from "./payments.mjs";
 import { close, refresh, operationCap } from "./workspace.mjs";
 import { units, amount } from "./budget.mjs";
 import { providerWarning } from "./provider.mjs";
+import { storage } from "./storage.mjs";
 import { availableMachines, quoteMachine } from "./ui-catalog.mjs";
 
 const money = (value) => {
@@ -53,7 +54,7 @@ async function main() {
       transactions: transactions.map((item) => ({ paid: money(item.paid), operation: item.operation || "unknown", hash: item.hash })),
     };
   });
-  console.log(JSON.stringify({ machines, message, available,
+  console.log(JSON.stringify({ machines, message, available, storage: await storage().catch((error) => ({ directory: error.message, availableBytes: null })),
     spending: `paid ${money(report.paid)} ${report.currency}${report.pendingVerification || report.unresolvedRequests || report.unreadableRecords ? " + unknown" : ""}    allocated ${money(report.budget?.allocated)} / ${money(report.budget?.limit)}`,
   }));
 }

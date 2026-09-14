@@ -19,7 +19,8 @@ export const sourceRecipes = {
 
 export async function recipe(input = "linux") {
   let value;
-  if (input === "reth-synced") {
+  if (typeof input === "object" && input !== null) value = input;
+  else if (input === "reth-synced") {
     const files = {};
     for (const name of ["ethereum-node.py", "ethereum-ready.py"])
       files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
@@ -39,13 +40,29 @@ export async function recipe(input = "linux") {
       readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
     } : JSON.parse(await readFile(file, "utf8"));
   }
+  return validateRecipe(value);
+}
+
+export function validateRecipe(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Recipe must be an object.");
   if (typeof value.name !== "string" || !Array.isArray(value.prepare) || !Array.isArray(value.artifacts))
     throw new Error("Recipe requires name, prepare argv arrays, and artifact paths.");
-  if (Object.keys(value).some((key) => !["name", "description", "prepare", "artifacts", "readiness", "afterCheckout"].includes(key)))
+  if (Object.keys(value).some((key) => !["schemaVersion", "name", "description", "prepare", "artifacts", "readiness", "afterCheckout", "checks"].includes(key)))
     throw new Error("Unknown recipe field. Recipes cannot change payment or runtime settings.");
+  if (value.schemaVersion !== undefined && value.schemaVersion !== 1) throw new Error("Unsupported recipe schemaVersion.");
+  if (value.checks !== undefined) {
+    if (!Array.isArray(value.checks)) throw new Error("checks must be named scoped probes.");
+    const names = new Set();
+    for (const check of value.checks) {
+      if (!check || Object.keys(check).some((key) => !["name", "scope", "argv", "result"].includes(key)) ||
+          !/^[a-z][a-z0-9-]*$/.test(check.name || "") || !/^[a-z][a-z0-9-]*$/.test(check.scope || "") ||
+          !["exit", "json"].includes(check.result) || names.has(check.name)) throw new Error("Invalid or duplicate readiness check.");
+      names.add(check.name);
+    }
+  }
   if (value.readiness !== undefined && !Array.isArray(value.readiness)) throw new Error("Readiness must be argv arrays.");
   if (value.afterCheckout !== undefined && !Array.isArray(value.afterCheckout)) throw new Error("afterCheckout must be argv arrays.");
-  for (const args of [...value.prepare, ...(value.afterCheckout || []), ...(value.readiness || [])])
+  for (const args of [...value.prepare, ...(value.afterCheckout || []), ...(value.readiness || []), ...(value.checks || []).map((check) => check.argv)])
     if (!Array.isArray(args) || !args.length || args.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Each preparation command must be an argv array.");
   const names = new Set();
@@ -153,7 +170,17 @@ async function prepareState(state) {
   return state;
 }
 
-export const prepare = (name) => locked(name, async () => prepareState(await load(name)));
+export const prepare = (name, remaining) => locked(name, async () => {
+  const state = await load(name);
+  if (remaining !== undefined) {
+    const minimumSeconds = duration(remaining);
+    if (!state.lease || !state.resizeRequest || state.bootstrapJob || !["preparing", "preparation_pending"].includes(state.phase) || minimumSeconds > state.durationSeconds)
+      throw new Error("An explicit shorter minimum applies only to an already-resized lease awaiting bootstrap.");
+    state.preparationAcceptance = { minimumSeconds, originalMinimumSeconds: state.durationSeconds, acceptedAt: new Date().toISOString(), providerExpiresAt: state.providerExpiresAt };
+    await save(state);
+  }
+  return prepareState(state);
+});
 
 async function refreshState(state, options) {
   if (!state.remoteId) throw new Error("No remote ID yet. Run reconcile to recover the saved create response.");

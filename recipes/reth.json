@@ -10,5 +10,27 @@
   ],
   "artifacts": [
     "/workspace/reth.log"
+  ],
+  "schemaVersion": 1,
+  "checks": [
+    {
+      "name": "development-chain",
+      "scope": "node",
+      "argv": [
+        "python3",
+        "-c",
+        "import json,urllib.request\nr=urllib.request.Request('http://127.0.0.1:8545',data=b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}',headers={'Content-Type':'application/json'})\nv=json.load(urllib.request.urlopen(r,timeout=5)); actual=int(v['result'],16)\nprint(json.dumps({'ready':actual==1337,'chainId':actual,'expectedChainId':1337,'rpc':'http://127.0.0.1:8545'}))"
+      ],
+      "result": "json"
+    },
+    {
+      "name": "reth-version",
+      "scope": "tools",
+      "argv": [
+        "/workspace/reth",
+        "--version"
+      ],
+      "result": "exit"
+    }
   ]
 }

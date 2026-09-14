@@ -67,3 +67,5 @@ The plan's `funding` object carries Tempo chain 4217, the exact USDC.e payment t
 
 - **compute-mpp:** On September 14, 2026, the MPP gateway reported a provisioning-record failure after payment, automatic VM destruction, and account credit. It supplied no credentials to recover that credit. The response concerns the gateway; it does not establish a fault in its underlying VM operator.
 - **smol-orthogonal:** Lifecycle requests returned `expired_key` on September 13, 2026. Authenticated lifecycle access remains a separate availability requirement.
+
+If migration leaves less than the planned work duration, preparation refuses by default. After deciding a shorter remaining window is sufficient, use `prepare NAME --duration 3h` to record that explicit acceptance. It applies only after a recorded resize and before bootstrap, preserves the original plan and budget, and never extends provider expiry or repeats payment.

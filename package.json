@@ -1,6 +1,6 @@
 {
   "name": "fission",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Temporary compute for your coding agent.",
   "type": "module",

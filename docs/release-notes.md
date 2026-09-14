@@ -1,7 +1,9 @@
-The catalog preloads at startup and refreshes behind a responsive TUI. Saved catalogs open immediately. Lists scroll one row at a time; mouse controls and Vim-style navigation share a cleaner layout. Press `?` for keyboard help.
+Keep verified build artifacts and prepared Reth execution data in a local directory or mounted drive. The Rust TUI's Storage view shows the location and available space. Dataset collection resumes verified chunks; restored datasets use the pinned writer and a fresh node startup.
 
-Temporary compute for your coding agent, with a Rust TUI, MPP quotes and budgets, Foundry/Reth/Tempo harnesses, and timestamped run reports.
+Named readiness checks distinguish installed tools, verified builds, and synced nodes. Portable experiment records retain the recipe, source, workload, environment, measurements, logs, receipts, and cleanup status. Reruns use a fresh plan and budget.
 
-Download the native package for your agent's computer and verify its matching SHA-256 checksum. Install with `npm install -g ./fission-*.tgz --ignore-scripts`, then run `fission skill install`. Start a new agent session or run `fission` to open the TUI.
+Concurrent VM requests serialize budget reservations. Free SSH transfers retain their request journals without repeatedly rewriting the monetary ledger. SSH opens from verified, unexpired access details, keeping tmux windows independent of job locks.
+
+Download the native package and verify its matching SHA-256 checksum. Install with `npm install -g ./fission-*.tgz --ignore-scripts`, then install the bundled agent skill. Use `fission help` for commands.
 
 Requires Node ≥22.13, SSH, and a configured Tempo CLI wallet. Linux packages require x86-64 and glibc ≥2.35. Repository access is required to download these private releases.

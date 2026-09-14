@@ -35,6 +35,15 @@ struct Snapshot {
     spending: String,
     message: String,
     available: Option<Catalog>,
+    #[serde(default)]
+    storage: Option<Storage>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Storage {
+    directory: String,
+    available_bytes: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +115,7 @@ struct View {
     offset: usize,
     top: usize,
     help: bool,
+    storage: bool,
     g_pending: bool,
     confirm: Option<String>,
     message: String,
@@ -338,6 +348,7 @@ fn render(
                     },
                     KeyCode::Char('2'),
                 ),
+                ("[Storage]", KeyCode::Char('o')),
                 ("[?]", KeyCode::Char('?')),
             ],
         );
@@ -354,7 +365,25 @@ fn render(
         if view.index >= view.top + count {
             view.top = view.index + 1 - count;
         }
-        if view.help {
+        if view.storage {
+            lines.push(("Local storage".into(), 1));
+            if let Some(storage) = &data.storage {
+                lines.push((storage.directory.clone(), 0));
+                lines.push((
+                    storage.available_bytes.map_or_else(
+                        || "Capacity unavailable".into(),
+                        |bytes| format!("{} GiB available", bytes / 1_073_741_824),
+                    ),
+                    0,
+                ));
+            }
+            lines.push((String::new(), 0));
+            lines.push(("Local files stay after a rental closes.".into(), 0));
+            lines.push((String::new(), 0));
+            lines.push(("Choose a directory or mounted drive:".into(), 0));
+            lines.push(("FISSION_STORAGE_DIR=/path/to/storage fission".into(), 0));
+            lines.push(("Agent commands also accept --storage-dir PATH.".into(), 2));
+        } else if view.help {
             for (text, style) in [
                 ("Navigation", 1),
                 ("j/k move   h/Esc back   l/Enter open", 0),
@@ -590,6 +619,8 @@ fn render(
         lines.resize(height - 4, (String::new(), 0));
         let status = if !view.message.is_empty() {
             view.message.clone()
+        } else if view.storage {
+            "Your disk. No recurring provider storage charge.".into()
         } else if view.available {
             data.available.as_ref().map_or_else(String::new, |c| {
                 format!(
@@ -626,7 +657,7 @@ fn render(
                     ("[y Save and close]", KeyCode::Char('y')),
                 ],
             );
-        } else if view.help {
+        } else if view.help || view.storage {
             buttons(&mut lines, &mut hits, &[("[Esc Back]", KeyCode::Esc)]);
         } else if view.detail {
             if view.available {
@@ -891,7 +922,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     continue;
                                 }
                                 hit.key
-                            } else if !view.detail && !view.help && view.confirm.is_none() {
+                            } else if !view.detail
+                                && !view.help
+                                && !view.storage
+                                && view.confirm.is_none()
+                            {
                                 let (_, height) = terminal::size()?;
                                 let count = usize::from(height).saturating_sub(12).max(1);
                                 let row = usize::from(mouse.row);
@@ -930,6 +965,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             if view.confirm.is_none() {
+                if key.code == KeyCode::Char('o') {
+                    view.storage = !view.storage;
+                    view.help = false;
+                    continue;
+                }
+                if view.storage {
+                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('h')) {
+                        view.storage = false;
+                    }
+                    continue;
+                }
                 if key.code == KeyCode::Char('?') {
                     view.help = !view.help;
                     continue;

@@ -76,7 +76,7 @@ function sshArguments(state) {
 
 export async function connect(name, options = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("SSH requires an interactive terminal.");
-  const { active, refresh } = await import("./workspace.mjs");
+  const { active } = await import("./workspace.mjs");
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
   let ownsInput = false;
@@ -84,10 +84,12 @@ export async function connect(name, options = {}) {
   const terminate = () => controller.abort();
   process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
   try {
-    let state = await active(name, false);
+    const state = await active(name);
     if (state.provider !== "compute-mpp") throw new Error("This provider has no SSH access. Use run/exec for its sandbox.");
-    await refresh(name, { signal });
-    state = await active(name);
+    // Bootstrap already verified this host. Interactive SSH must not contend
+    // with running jobs for the local mutation lock or wait on provider HTTP.
+    if (!Number.isFinite(Date.parse(state.providerExpiresAt)) || Date.parse(state.providerExpiresAt) <= Date.now())
+      throw new Error("Confirm the current lease with status --refresh before opening SSH.");
     signal.throwIfAborted();
     return await new Promise((resolve, reject) => {
       // Bound dead interactive connections to two missed 15-second probes so
@@ -224,10 +226,13 @@ export async function prepareLease(state) {
     return false;
   }
   if (state.resizePending || state.observedMachine !== state.machine.id || !["active", "running"].includes(state.providerStatus)) return false;
+  const minimumRemaining = state.preparationAcceptance?.minimumSeconds ?? state.durationSeconds;
+  if (!Number.isSafeInteger(minimumRemaining) || minimumRemaining < 60 || minimumRemaining > state.durationSeconds)
+    throw new Error("Invalid accepted remaining-time minimum.");
   for (const key of ["cpu", "memoryGiB", "diskGiB"])
     if (!Number.isFinite(state.observedResources?.[key]) || state.observedResources[key] < state.capabilities[key])
       throw new Error("Provider has not confirmed the planned target capacity.");
-  if (Date.parse(state.providerExpiresAt) - Date.now() < state.durationSeconds * 1000)
+  if (Date.parse(state.providerExpiresAt) - Date.now() < minimumRemaining * 1000)
     throw new Error("Migration left less than the requested target lease. Inspect or close this machine.");
   await prepareAccess(state);
   const probe = "import json,os,platform; s=os.statvfs('/'); m=int(next(x.split()[1] for x in open('/proc/meminfo') if x.startswith('MemTotal:')))*1024; print(json.dumps({'architecture':platform.machine(),'cpu':os.cpu_count(),'memoryBytes':m,'diskBytes':s.f_blocks*s.f_frsize,'freeBytes':s.f_bavail*s.f_frsize}))";
@@ -239,7 +244,7 @@ export async function prepareLease(state) {
       // Provider RAM is nominal GiB; usable pages exclude firmware/kernel reserve.
       Math.ceil(guest.memoryBytes / 2 ** 30) < (required.memoryGiB || 1))
     throw new Error("Guest capacity does not satisfy the workload. Inspect or close the machine.");
-  if (Date.parse(state.providerExpiresAt) - Date.now() < state.durationSeconds * 1000)
+  if (Date.parse(state.providerExpiresAt) - Date.now() < minimumRemaining * 1000)
     throw new Error("Insufficient target lease remains for preparation and work.");
   state.guestResources = { ...guest, observedAt: new Date().toISOString() };
   state.leasePhase = "verified";

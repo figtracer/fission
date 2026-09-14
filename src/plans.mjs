@@ -180,14 +180,17 @@ export async function createPlan(name, options) {
   const previous = await readJSON(join(directory(name), "state.json"));
   if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
   options = { ...options, provider: providerId(options.provider) };
-  if (options.recipe === "reth-synced") {
+  if (options.from) options = await (await import("./experiments.mjs")).planOptions(options);
+  const definition = await recipe(options.recipe || "linux");
+  const recipeName = definition.name;
+  if (recipeName === "reth-synced") {
     if (options.profile && options.profile !== "reth-synced") throw new Error("The synced-node recipe requires its matching profile.");
     options.profile = "reth-synced";
   }
-  if (Object.hasOwn(sourceRecipes, options.recipe)) {
-    if (options.profile && options.profile !== options.recipe) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
+  if (Object.hasOwn(sourceRecipes, recipeName)) {
+    if (options.profile && options.profile !== recipeName) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
     if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");
-    options.profile = options.recipe;
+    options.profile = recipeName;
   }
   if (options.budget !== undefined) {
     if (options["max-spend"] !== undefined || options["total-spend"] !== undefined)
@@ -232,7 +235,6 @@ export async function createPlan(name, options) {
     const matches = match(requirements);
     if (!matches.some((item) => item.provider === provider && item.unmet.length === 0)) return { version: 1, status: "unavailable", name, profile, requirements, candidates: matches, paymentSubmitted: false };
   }
-  const definition = await recipe(options.recipe || "linux");
   if (definition.artifacts.some((path) => basename(path) === "output.log")) throw new Error("output.log is reserved for the bootstrap artifact; use another artifact basename.");
   const timeout = duration(options.duration);
   const totalCap = options["total-spend"];

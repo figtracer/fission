@@ -44,18 +44,29 @@ Planning and preparation
     and prepare /workspace/build for a separate bounded build job.
     reth-synced prepares /workspace/ethereum; snapshot import and sync are separate jobs.
   open NAME --plan ID --approve
-  prepare NAME
+  prepare NAME [--duration SHORTER_REMAINING_MINIMUM]
   recipes
   open NAME --recipe linux|reth|FILE --duration 2h --max-spend 1 [--approve]
 
 Jobs
   run NAME JOB --duration 10m -- COMMAND [ARG...]
+  run NAME JOB --from experiment.json --duration 10m
+  plan NAME --from experiment.json --budget AMOUNT --cheapest --region REGION --duration 2h
+  dataset inspect NAME --max-bytes BYTES [--storage-dir DIR]
+  dataset save NAME JOB --duration 2h --max-bytes BYTES [--storage-dir DIR]
+  dataset collect NAME JOB --max-bytes BYTES [--storage-dir DIR]
+  dataset restore NAME JOB --from manifest.json --duration 2h --max-bytes BYTES
+  storage [--storage-dir DIR --max-bytes BYTES]
+  cache list [--storage-dir DIR]
+  cache save NAME --max-bytes BYTES [--storage-dir DIR]
+  cache restore NAME ID --max-bytes BYTES [--storage-dir DIR]
+  check NAME --scope tools|build|node --duration 1m [--max-head-age SECONDS]
   jobs NAME
   job NAME JOB [--refresh]
   wait NAME JOB --duration 5m --max-spend 0.01
 
 Observe and collect
-  report NAME [JOB] [--log FILE --notes FILE --output DIR]
+  report NAME [JOB] [--log FILE --notes FILE --measurements FILE --output DIR]
     Save a timestamped Markdown report and structured record under fission/NAME.
   list [--json]
   status NAME [--refresh] [--json]
@@ -79,6 +90,7 @@ Terminal controls
   j/k / h/l        Move / back and open
   gg / G           First / last row
   Ctrl-u / Ctrl-d  Half page up / down
+  o                Local storage location and capacity
   ?                Keyboard help
   r / v            Reload local state / verify payment receipts
   p                Check the selected provider (uses its request cap)
@@ -121,7 +133,7 @@ function summary(state) {
     providerExpiresAt: state.providerExpiresAt,
     closedAt: state.closedAt,
     remoteStatus: state.remoteStatus, providerStatus: state.providerStatus, resizePending: state.resizePending, observedResources: state.observedResources, exportedTo: state.exportedTo,
-    lease: state.lease, leasePhase: state.leasePhase, guestResources: state.guestResources,
+    lease: state.lease, leasePhase: state.leasePhase, preparationAcceptance: state.preparationAcceptance, guestResources: state.guestResources,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, source: state.source, planId: state.id,
   };
@@ -166,6 +178,10 @@ async function main() {
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
+    "storage-dir": { type: "string" },
+    "max-bytes": { type: "string" },
+    scope: { type: "string" }, "max-head-age": { type: "string" },
+    from: { type: "string" }, measurements: { type: "string" },
     log: { type: "string" }, notes: { type: "string" }, recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
   } });
   if (values.help) { console.log(help); return; }
@@ -173,18 +189,18 @@ async function main() {
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
   const allowed = {
-    skill: ["output"], guide: [], report: ["log", "notes", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
-    plan: ["recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
+    skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile"],
+    plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
-    prepare: [], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
-    jobs: [], run: ["duration"], job: ["refresh"], wait: ["duration", "max-spend"],
+    prepare: ["duration"], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
+    dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], job: ["refresh"], wait: ["duration", "max-spend"],
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
@@ -217,8 +233,41 @@ async function main() {
       if (value.status === "unavailable") process.exitCode = 2;
       break;
     }
+    case "dataset": {
+      const valid = { inspect: ["storage-dir", "max-bytes"], save: ["storage-dir", "max-bytes", "duration"], collect: ["storage-dir", "max-bytes"], restore: ["max-bytes", "duration", "from"] }[name];
+      if (!valid || Object.keys(values).some((option) => option !== "json" && !valid.includes(option))) throw new Error("Invalid dataset operation options; run fission help.");
+      emit(await (await import("./datasets.mjs")).dataset(name, first, second, values, ["save", "restore"].includes(name) ? duration(values.duration) : undefined));
+      break;
+    }
+    case "storage": emit(await (await import("./storage.mjs")).storage(values["storage-dir"], Number(values["max-bytes"] || 0))); break;
+    case "cache": {
+      const cache = await import("./cache.mjs");
+      if (name === "list") {
+        if (values["max-bytes"] !== undefined) throw new Error("cache list takes no byte limit.");
+        emit(await cache.listCaches(values["storage-dir"]));
+      } else emit(await cache.buildCache(name, first, second, values["max-bytes"], values["storage-dir"]));
+      break;
+    }
+    case "check": {
+      const result = await (await import("./readiness.mjs")).check(name, values.scope, duration(values.duration), values["max-head-age"]);
+      emit(result); if (!result.ready) process.exitCode = 1;
+      break;
+    }
     case "jobs": emit((await listJobs(name)).map(jobSummary)); break;
-    case "run": emit(jobSummary(await runJob(name, first, tail, duration(values.duration)))); break;
+    case "run": {
+      if (values.from) {
+        if (tail.length) throw new Error("Use --from or a command, not both.");
+        const record = await (await import("./experiments.mjs")).readExperiment(values.from);
+        const { launch } = await import("./jobs.mjs");
+        emit(jobSummary(await locked(name, async () => {
+          const state = await active(name);
+          if (state.recipe.digest !== record.recipeSha256 || JSON.stringify(state.source || null) !== JSON.stringify(record.source))
+            throw new Error("Machine recipe/source differs from the experiment. Plan a compatible rental first.");
+          return launch(state, first, record.workload.commands, duration(values.duration), [], record.workload.cwd);
+        })));
+      } else emit(jobSummary(await runJob(name, first, tail, duration(values.duration))));
+      break;
+    }
     case "job": emit(jobSummary(await getJob(name, first, values.refresh))); break;
     case "wait": {
       const job = await waitJob(name, first, duration(values.duration), values["max-spend"]); emit(jobSummary(job));
@@ -249,7 +298,7 @@ async function main() {
       values.json ? emit(summary(state)) : console.log(table([state]));
       break;
     }
-    case "prepare": emit(summary(await prepare(name))); break;
+    case "prepare": emit(summary(await prepare(name, values.duration))); break;
     case "reconcile": emit(summary(await reconcile(name))); break;
     case "exec": {
       const result = await locked(name, async () => execute(await active(name), tail, operationCap));
