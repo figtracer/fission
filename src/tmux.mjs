@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { root, list, load, fileLocked } from "./state.mjs";
+import { storageRoot } from "./storage.mjs";
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -44,6 +45,7 @@ export async function openTmux() {
       throw new Error("A different tmux session uses this name; preserve it.");
   } else {
     await tmux("new-session", "-d", "-s", session, "-n", "machines", "-e", `FISSION_HOME=${root}`,
+      "-e", `FISSION_STORAGE_DIR=${storageRoot()}`,
       "-e", `FISSION_TMUX_SESSION=${session}`, "-e", `FISSION_TEMPO=${process.env.FISSION_TEMPO || join(homedir(), ".tempo/bin/tempo")}`,
       process.execPath, fileURLToPath(import.meta.url), "serve");
     await tmux("set-option", "-t", session, "@fission-home", root);
