@@ -18,7 +18,7 @@ export function runProcess(command, args, options = {}) {
     let stdout = "", stderr = "", interruption;
     if (options.signal?.aborted) return resolve({ code: null, stdout, stderr, interruption: "interrupted" });
     const grouped = process.platform !== "win32";
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], detached: grouped });
+    const child = spawn(command, args, { stdio: [options.inputFd ?? "ignore", options.outputFd ?? "pipe", "pipe"], detached: grouped });
     const stop = (reason) => {
       interruption = reason;
       if (!child.pid) return;
@@ -33,7 +33,7 @@ export function runProcess(command, args, options = {}) {
     options.signal?.addEventListener("abort", abort, { once: true });
     const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => stop("observation_deadline"), options.timeoutMs);
     const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); };
-    child.stdout.on("data", (data) => { stdout += data; });
+    child.stdout?.on("data", (data) => { stdout += data; });
     child.stderr.on("data", (data) => { stderr += data; });
     child.on("error", (error) => { cleanup(); reject(error); });
     child.on("close", (code, signal) => { cleanup(); resolve({ code, signal, stdout, stderr, interruption }); });
@@ -56,6 +56,8 @@ export async function quote(operation, body, provider = "modal-tempo") {
 
 export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
   state.provider = providerId(state.provider);
+  if ((options.inputFd !== undefined || options.outputFd !== undefined) && (state.provider !== "compute-mpp" || operation !== "exec"))
+    throw new Error("File streams require the VM SSH transport.");
   if (state.provider === "compute-mpp" && operation !== "create")
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
   const dir = join(directory(state.name), "requests");

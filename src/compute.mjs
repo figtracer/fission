@@ -104,7 +104,7 @@ export async function connect(name, options = {}) {
 async function ssh(state, command, options = {}) {
   const quote = (arg) => "'" + arg.replaceAll("'", "'\"'\"'") + "'";
   const result = await runProcess("ssh", [...sshArguments(state), `root@${state.sshHost}`,
-    command.map(quote).join(" ")], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+    command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   if (result.code === null || result.code === 255) throw new Error("SSH outcome unresolved. Inspect the existing job before executing it again.");
   return { returncode: result.code, stdout: result.stdout, stderr: result.stderr };
 }

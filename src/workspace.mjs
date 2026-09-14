@@ -1,4 +1,5 @@
 import { readFile, open, rename, mkdir, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
 import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -219,12 +220,41 @@ export async function active(name, requireReady = true) {
   return state;
 }
 
+async function fingerprint(file) {
+  const info = await file.stat();
+  if (!info.isFile() || !Number.isSafeInteger(info.size)) throw new Error("Transfer requires a regular file of a supported size.");
+  const hash = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024);
+  for (let offset = 0; offset < info.size;) {
+    // Explicit positions leave the descriptor at its start for the SSH child.
+    const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, info.size - offset), offset);
+    if (!bytesRead) throw new Error("File changed while calculating its digest.");
+    hash.update(buffer.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+  return { size: info.size, sha256: hash.digest("hex") };
+}
+
 export async function upload(state, local, remote) {
   remotePath(remote);
+  if (providerId(state.provider) === "compute-mpp") {
+    const source = await open(resolve(local), constants.O_RDONLY | constants.O_NONBLOCK);
+    const staging = remote + ".fission-" + randomUUID();
+    try {
+      const expected = await fingerprint(source);
+      const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
+      const result = await execute(state, ["python3", "-c", script, "receive", staging, remote, String(expected.size), expected.sha256], operationCap, undefined, { inputFd: source.fd });
+      if (result.returncode) throw new Error("Upload verification or publication failed; destination must not exist.");
+      const received = JSON.parse(result.stdout);
+      if (received.size !== expected.size || received.sha256 !== expected.sha256) throw new Error("Unrecognized upload acknowledgement.");
+      return { remote, bytes: expected.size, sha256: expected.sha256 };
+    } catch (error) {
+      throw new Error(`${error.message} Inspect destination ${remote} and staging ${staging}; no transfer was retried.`);
+    } finally { await source.close(); }
+  }
   const bytes = await readFile(resolve(local));
-  // SSH accepts 48 KiB chunks; the paid gateway rejected that size because
-  // its payment-challenge headers also carry request data.
-  const chunkBytes = (providerId(state.provider) === "compute-mpp" ? 48 : 4) * 1024;
+  // The paid gateway rejected larger chunks because its payment-challenge
+  // headers also carry request data.
+  const chunkBytes = 4 * 1024;
   const temp = remote + ".fission-" + randomUUID();
   const script = "import sys,base64,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
   for (let offset = 0; offset < Math.max(bytes.length, 1); offset += chunkBytes) {
@@ -241,11 +271,24 @@ export async function download(state, remote, local) {
   remotePath(remote);
   const destination = resolve(local);
   await mkdir(resolve(destination, ".."), { recursive: true });
-  const target = await open(destination, "wx", 0o600);
+  const target = await open(destination, "wx+", 0o600);
   const script = "import sys,json,hashlib,base64; f=open(sys.argv[1],'rb'); b=f.read(); i=int(sys.argv[2]); print(json.dumps({'size':len(b),'sha256':hashlib.sha256(b).hexdigest(),'data':base64.b64encode(b[i:i+49152]).decode()}))";
   let expected, offset = 0;
   const hash = createHash("sha256");
   try {
+    if (providerId(state.provider) === "compute-mpp") {
+      const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
+      const metadata = await execute(state, ["python3", "-c", script, "metadata", remote], operationCap);
+      if (metadata.returncode) throw new Error("Remote file could not be read.");
+      expected = JSON.parse(metadata.stdout);
+      if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error("Invalid file manifest.");
+      const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { outputFd: target.fd });
+      if (result.returncode) throw new Error("Export interrupted or file changed.");
+      const actual = await fingerprint(target);
+      if (actual.size !== expected.size || actual.sha256 !== expected.sha256) throw new Error("Export digest mismatch.");
+      await target.sync();
+      return { local: destination, remote, bytes: actual.size, sha256: actual.sha256 };
+    }
     do {
       const result = await execute(state, ["python3", "-c", script, remote, String(offset)], operationCap);
       if (result.returncode) throw new Error("Remote file could not be read.");
