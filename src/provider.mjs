@@ -13,6 +13,13 @@ export const money = units;
 export const paymentTerms = { chainId: 4217, token: "0x20c000000000000000000000b9537d11c60e8b50", currency: "USDC.e" };
 const paymentOptions = ["--payment-intent", "charge", "--payment-token", paymentTerms.token, "--network", "tempo"];
 
+function provisioningRecovery(response) {
+  return typeof response?.error === "string" && response.details?.cleanup === "destroyed" &&
+    response.details.cleanup_error === null && Number.isFinite(response.details.credited) && response.details.credited > 0
+    ? " Provider reports automatic destruction and account credit; credit access and payment recovery remain unverified."
+    : "";
+}
+
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", interruption;
@@ -78,7 +85,8 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   await writeJSON(intent, { id, operation, body, maximum, state: result.code === 0 ? "received" : "unknown", exitCode: result.code, interruption: result.interruption, finishedAt: new Date().toISOString() });
   if (result.code !== 0 || !response) {
     await writeJSON(join(dir, `${id}.error.json`), { code: result.code, stderr: result.stderr, stdout: result.stdout });
-    throw new Error(`Provider outcome is unresolved for ${operation} (${id}). Saved response: ${responsePath}. Do not repeat the payment.`);
+    const recovery = state.provider === "compute-mpp" && operation === "create" ? provisioningRecovery(response) : "";
+    throw new Error(`Provider outcome is unresolved for ${operation} (${id}).${recovery} Saved response: ${responsePath}. Do not repeat the payment.`);
   }
   if (response.error || response.detail) throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
   if (state.provider === "compute-mpp") {
@@ -92,8 +100,11 @@ export async function recoverCreate(state) {
   const path = join(directory(state.name), "requests", `${state.createRequest}.response.json`);
   let response;
   try { response = await readJSON(path); } catch { return null; }
-  if (providerId(state.provider) === "compute-mpp" && response)
+  if (providerId(state.provider) === "compute-mpp" && response) {
+    const recovery = provisioningRecovery(response);
+    if (recovery) throw new Error(`Creation remains unresolved.${recovery} Saved response: ${path}. Do not repeat the payment.`);
     return (await import("./compute.mjs")).adopt(state, response);
+  }
   return response && /^sb-[A-Za-z0-9]+$/.test(response.sandbox_id || "") ? response.sandbox_id : null;
 }
 
