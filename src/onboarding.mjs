@@ -20,12 +20,13 @@ export async function installSkill(output) {
   return { installed: destination, changed: true };
 }
 
+export const guideTopics = ["rental", "harnesses", "reth"];
+
 export async function guide(name) {
-  const topics = ["rental", "harnesses", "reth"];
   const [topic, section, extra] = name?.split("/") || [];
-  if (name !== undefined && (!topics.includes(topic) || extra !== undefined || section === ""))
+  if (name !== undefined && (!guideTopics.includes(topic) || extra !== undefined || section === ""))
     throw new Error("Use fission guide to choose a topic or topic/section.");
-  const documents = await Promise.all((topic ? [topic] : topics).map(async (key) => {
+  const documents = await Promise.all((topic ? [topic] : guideTopics).map(async (key) => {
     const text = await readFile(new URL(`../docs/${key}.md`, import.meta.url), "utf8");
     if (topic && !section) return text;
     const headings = [...text.matchAll(/^## (.+)$/gm)];

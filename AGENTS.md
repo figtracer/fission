@@ -24,4 +24,6 @@ Read the guide that matches the operation:
 
 During private iteration, keep fixes in source without routine version bumps, tags, or GitHub releases. Prepare a clean 0.1.x release when the user requests publication.
 
+Consult Amp's built-in Oracle whenever guidance or planning help is needed, including consequential design decisions and unresolved technical questions. Use its advice to inform the plan, then verify and own the implementation. This does not authorize exporting private source through other services.
+
 The Node backend owns plans, payments, durable state, jobs, and lifecycle operations. The Rust TUI uses that backend; Python harnesses run on the guest. Keep these ownership boundaries and the single-repository layout. Keep the README brief, command syntax in `fission help`, and operational detail in the relevant guide. Changes to code-enforced spending, replay, or readiness boundaries require an explicit behavior decision.
