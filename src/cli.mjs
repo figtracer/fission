@@ -70,11 +70,16 @@ Finish and recover
 
 Terminal controls
   a                Browse available machines / return to owned machines
-  b / g            Available: show all prices / cycle selected machine regions
+  b / [ / ]        Available: all prices / previous or next region
   Enter            Available: open details, then fetch a free 24h quote
   arrows / j / k   Select a machine or scroll receipts
   Enter            Open details, then SSH into a ready VM
-  Tab / s          Filter machines / change sorting
+  Tab / 1 / 2      Switch tabs
+  f / s            Filter machines / change sorting
+  j/k / h/l        Move / back and open
+  gg / G           First / last row
+  Ctrl-u / Ctrl-d  Half page up / down
+  ?                Keyboard help
   r / v            Reload local state / verify payment receipts
   p                Check the selected provider (uses its request cap)
   x                Confirm, save declared files, and close the selected machine

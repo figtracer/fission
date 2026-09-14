@@ -9,7 +9,7 @@ Download the package matching the computer running your agent: `darwin-arm64` fo
 For Apple Silicon:
 
 ```sh
-gh release download v0.1.0 --repo figtracer/fission --pattern '*-darwin-arm64.tgz*'
+gh release download v0.1.1 --repo figtracer/fission --pattern '*-darwin-arm64.tgz*'
 shasum -a 256 -c fission-*-darwin-arm64.tgz.sha256
 npm install -g ./fission-*-darwin-arm64.tgz --ignore-scripts
 fission skill install
@@ -30,7 +30,9 @@ npm run setup
 
 `fission` opens the TUI from any terminal. `fission help` lists commands. `FISSION_HOME` selects the machine history and budget directory; keep using the same directory for existing rentals.
 
-Press `a` for available VMs, sorted by their daily catalog estimate. The default view applies the saved VM ceiling; `b` includes higher prices. Enter opens specs and regions, `g` cycles regions, and Enter again fetches a fresh 24-hour quote. These controls only browse and quote. Agents use saved plans to choose workload requirements, shorter leases, and authorized purchases.
+Use `Tab` or `1`/`2` to switch between your machines and Available. The catalog preloads at startup, shows the saved catalog immediately on subsequent launches, and refreshes in the background. Available VMs are sorted by their daily catalog estimate. The default view applies the saved VM ceiling; `b` includes higher prices. Enter opens specs and regions, `[`/`]` cycle regions, and Enter again fetches a fresh 24-hour quote. These controls only browse and quote. Agents use saved plans to choose workload requirements, shorter leases, and authorized purchases.
+
+Use `j`/`k` or the arrow keys to move, `h`/Esc to go back, and `l`/Enter to open a row. `gg`/`G` jump to the first/last row; Ctrl-u/Ctrl-d move half a page. `f` filters owned machines, `s` changes their sort order, and `?` opens help.
 
 Your machines are grouped by project and sorted by name. Click a project to expand it, then a machine for details. The mouse wheel scrolls; the navigation and detail buttons also accept clicks. Unresolved requests appear in history and are excluded from the active count; their recovery records and reserved funds stay intact.
 

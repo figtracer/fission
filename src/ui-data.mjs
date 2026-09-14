@@ -18,7 +18,7 @@ const date = (value) => Number.isFinite(Date.parse(value)) ? new Date(value).toI
 async function main() {
   const [action, name] = process.argv.slice(2);
   let message = "";
-  let available;
+  let available = action === "snapshot" ? await availableMachines({ cached: true }) : undefined;
   if (action === "close") {
     await mkdir(join(root, "exports"), { recursive: true, mode: 0o700 });
     const result = await close(name, { output: join(root, "exports", `${name}-${Date.now()}`) });
@@ -57,4 +57,11 @@ async function main() {
     spending: `paid ${money(report.paid)} ${report.currency}${report.pendingVerification || report.unresolvedRequests || report.unreadableRecords ? " + unknown" : ""}    allocated ${money(report.budget?.allocated)} / ${money(report.budget?.limit)}`,
   }));
 }
-main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+// Closing the TUI closes this pipe and cancels its read-only catalog worker.
+const background = process.env.FISSION_UI_BACKGROUND === "1" && process.argv[2] === "catalog";
+if (background) {
+  process.stdin.resume();
+  process.stdin.on("end", () => process.exit(0));
+}
+main().catch((error) => { console.error(error.message); process.exitCode = 1; })
+  .finally(() => { if (background) process.stdin.destroy(); });
