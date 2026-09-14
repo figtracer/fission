@@ -3,7 +3,7 @@ import { mkdir, readFile, access } from "node:fs/promises";
 import { randomUUID, createHash } from "node:crypto";
 import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { recipe, duration, start, sourceRecipes } from "./workspace.mjs";
-import { quote, money, runProcess, paymentTerms } from "./provider.mjs";
+import { quote, money, runProcess, paymentTerms, providerWarning } from "./provider.mjs";
 import { catalog, machineCapabilities } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
@@ -24,7 +24,7 @@ export const providers = [{
   id: "agentvm", available: false,
   reason: "Published MPP profile has unselectable capacity (up to 160 GB), Linux only, and no verified capability-authenticated immediate teardown.",
   evidence: "https://mpp.agentvm.sh/compute/sessions",
-}];
+}].map((provider) => ({ ...provider, warning: providerWarning(provider.id) }));
 
 // Planning floors, not performance guarantees; stricter issue-specific requirements
 // may be supplied. Full-node figures require rechecking snapshot expansion/growth.
@@ -160,7 +160,7 @@ export async function machineOffers(options) {
     }
     catch { quoteFailures++; continue; }
     if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
-    offers.push({ provider: "compute-mpp", machine: machine.id, region: options.region, capabilities,
+    offers.push({ provider: "compute-mpp", providerWarning: providerWarning("compute-mpp"), machine: machine.id, region: options.region, capabilities,
       creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
       quotedAt: new Date().toISOString(), leaseHours: lease ? null : 24, requestedHours: seconds / 3600, lease: quoted });
   }
@@ -269,7 +269,7 @@ export async function createPlan(name, options) {
   if (selection && money(offer.amount) > money(selection.selectedQuote)) throw new Error("Quote increased after selection. No purchase submitted; request a fresh plan.");
   if (options.budget !== undefined) creationCap = offer.amount;
   const lease = quotedLease(rental?.lease, offer.amount);
-  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
+  const value = { version: 1, status: "planned", id: randomUUID(), name, profile, requirements, provider, providerWarning: providerWarning(provider), kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
   return { ...value, paymentSubmitted: false, open: ["fission", "open", name, "--plan", value.id, "--approve"],

@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { directory, readJSON, writeJSON, save } from "./state.mjs";
 import { reserve } from "./budget.mjs";
-import { runProcess, validRemoteId, money } from "./provider.mjs";
+import { runProcess, validRemoteId, money, recordProviderFailure } from "./provider.mjs";
 
 const endpoint = "https://compute.x402layer.cc/compute/";
 const usableIP = (value) => isIP(value || "") && !["0.0.0.0", "::", "127.0.0.1", "::1"].includes(value);
@@ -59,7 +59,10 @@ async function management(state, method, options = {}, body) {
     body: body ? JSON.stringify(body) : undefined, signal, redirect: "error",
   });
   // A 404 is not proof of destruction: it can mean lost authorization or routing.
-  if (!response.ok) throw new Error(`Compute ${method} HTTP ${response.status}; outcome requires observation.`);
+  if (!response.ok) {
+    await recordProviderFailure(state.provider);
+    throw new Error(`Compute ${method} HTTP ${response.status}; outcome requires observation.`);
+  }
   return response.json();
 }
 

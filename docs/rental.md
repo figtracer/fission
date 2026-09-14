@@ -54,3 +54,10 @@ A provider resize sets `resizePending` and blocks new work while status/recovery
 The plan's `funding` object carries Tempo chain 4217, the exact USDC.e payment token, creation amount, and allocation. Wallet balance and shortfall remain unknown. Use its preview arguments for an existing authorized Glue policy, matching the sender and `receiveToken` (`usdc.e`); Glue's `token` denotes swap input. New refill policies, targets, grants, or swap budgets need separate authorization. Fission supplies the handoff; the operator manages Glue execution.
 
 `fission spending --refresh` verifies saved transaction references through free Tempo RPC reads. It reports deduplicated sender USDC.e outflow, including fees in that token. Missing receipts remain unknown; other assets and later refunds are excluded. Receipts describe payments, while the retained ledger bounds authorization.
+
+## Provider history
+
+`!` marks a provider with a recorded request failure. Failed provider operations retain this marker in local history; successful later requests do not clear it. User job exit codes and cancelled observers are separate from provider failures. The TUI shows the symbol; CLI quotes and plans include a warning linked here. The marker describes provider history, independently of the selected machine's state, and leaves the provider selectable where it otherwise meets requirements.
+
+- **compute-mpp:** On September 14, 2026, the MPP gateway reported a provisioning-record failure after payment, automatic VM destruction, and account credit. It supplied no credentials to recover that credit. The response concerns the gateway; it does not establish a fault in its underlying VM operator.
+- **smol-orthogonal:** Lifecycle requests returned `expired_key` on September 13, 2026. Authenticated lifecycle access remains a separate availability requirement.

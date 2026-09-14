@@ -5,6 +5,7 @@ import { root, list } from "./state.mjs";
 import { spending } from "./payments.mjs";
 import { close, refresh, operationCap } from "./workspace.mjs";
 import { units, amount } from "./budget.mjs";
+import { providerWarning } from "./provider.mjs";
 
 const money = (value) => {
   if (value == null) return "unknown";
@@ -34,7 +35,7 @@ async function main() {
     const capacity = state.observedResources || (state.lease ? state.lease.starterCapabilities : state.capabilities);
     const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
     return {
-      name: state.name, phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, finished,
+      name: state.name, phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
       ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
       requested: state.requestedAt || "", expiry: Math.floor(Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000) || null,
       estimated: !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,

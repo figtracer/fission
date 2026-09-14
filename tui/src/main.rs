@@ -38,6 +38,8 @@ struct Machine {
     name: String,
     phase: String,
     provider: String,
+    #[serde(default)]
+    provider_warning: bool,
     finished: bool,
     ssh: bool,
     requested: String,
@@ -242,7 +244,16 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
                     format!(
                         "{}{}",
                         if i == view.index { "> " } else { "  " },
-                        row(&m.name, &m.phase, &remaining(m), &m.paid)
+                        row(
+                            &if m.provider_warning {
+                                format!("! {}", m.name)
+                            } else {
+                                m.name.clone()
+                            },
+                            &m.phase,
+                            &remaining(m),
+                            &m.paid,
+                        )
                     ),
                     if i == view.index { 3 } else { 0 },
                 );
@@ -256,7 +267,13 @@ fn render(data: &Snapshot, view: &View, busy: bool, previous: &mut Vec<u8>) -> i
         } else if let Some(m) = rows.get(view.index) {
             add(m.name.clone(), 1);
             add(
-                format!("{} / {} / {}", m.phase, remaining(m), m.provider),
+                format!(
+                    "{} / {} / {}{}",
+                    m.phase,
+                    remaining(m),
+                    m.provider,
+                    if m.provider_warning { " !" } else { "" }
+                ),
                 0,
             );
             add(m.capacity.clone(), 2);

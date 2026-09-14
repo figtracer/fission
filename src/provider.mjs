@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { directory, readJSON, writeJSON, providerId } from "./state.mjs";
+import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { units, reserve } from "./budget.mjs";
 
 const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
@@ -12,6 +13,18 @@ const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(home
 export const money = units;
 export const paymentTerms = { chainId: 4217, token: "0x20c000000000000000000000b9537d11c60e8b50", currency: "USDC.e" };
 const paymentOptions = ["--payment-intent", "charge", "--payment-token", paymentTerms.token, "--network", "tempo"];
+
+// Recorded incidents apply to providers; machine state remains independent.
+const providerIncidents = new Set(["compute-mpp", "smol-orthogonal"]);
+const failureFile = (provider) => join(root, ".provider-failures", encodeURIComponent(providerId(provider)) + ".json");
+export const providerWarning = (provider) => providerIncidents.has(providerId(provider)) || existsSync(failureFile(provider))
+  ? "Recorded provider failure; see docs/rental.md#provider-history."
+  : null;
+
+export async function recordProviderFailure(provider) {
+  const path = failureFile(provider);
+  if (!existsSync(path)) await writeJSON(path, { provider: providerId(provider), recordedAt: new Date().toISOString() });
+}
 
 function provisioningRecovery(response) {
   return typeof response?.error === "string" && response.details?.cleanup === "destroyed" &&
@@ -72,6 +85,8 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   const responsePath = join(dir, `${id}.response.json`);
   const metaPath = join(dir, `${id}.meta.json`);
   if (await readJSON(intent)) throw new Error(`Request ${id} already exists. Reconcile it; do not pay again.`);
+  if (operation === "create" && providerWarning(state.provider))
+    console.error(`⚠ Provider history: ${providerWarning(state.provider)}`);
   await reserve(state, operation, maximum, id);
   await writeJSON(intent, { id, operation, body, maximum, submittedAt: new Date().toISOString(), state: "submitting" });
   for (const path of [responsePath, metaPath]) {
@@ -85,10 +100,14 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   await writeJSON(intent, { id, operation, body, maximum, state: result.code === 0 ? "received" : "unknown", exitCode: result.code, interruption: result.interruption, finishedAt: new Date().toISOString() });
   if (result.code !== 0 || !response) {
     await writeJSON(join(dir, `${id}.error.json`), { code: result.code, stderr: result.stderr, stdout: result.stdout });
+    if (!result.interruption) await recordProviderFailure(state.provider);
     const recovery = state.provider === "compute-mpp" && operation === "create" ? provisioningRecovery(response) : "";
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}).${recovery} Saved response: ${responsePath}. Do not repeat the payment.`);
   }
-  if (response.error || response.detail) throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
+  if (response.error || response.detail) {
+    await recordProviderFailure(state.provider);
+    throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
+  }
   if (state.provider === "compute-mpp") {
     const { adopt } = await import("./compute.mjs");
     return { sandbox_id: await adopt(state, response) };

@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { list, load, locked } from "./state.mjs";
-import { execute, money } from "./provider.mjs";
+import { execute, money, providerWarning } from "./provider.mjs";
 import { plan, start, refresh, reconcile, active, upload, download, close, operationCap, prepare } from "./workspace.mjs";
 
 import { budget } from "./budget.mjs";
@@ -101,7 +101,7 @@ FISSION_HOME selects the state directory; FISSION_TEMPO selects the Tempo binary
 
 function summary(state) {
   return {
-    name: state.name, provider: state.provider, kind: state.kind, phase: state.phase,
+    name: state.name, provider: state.provider, providerWarning: providerWarning(state.provider), kind: state.kind, phase: state.phase,
     remoteId: state.remoteId, recipe: state.recipe.name,
     requestedAt: state.requestedAt, readyAt: state.readyAt,
     deadlineEstimate: state.deadlineEstimate, observedAt: state.observedAt,
@@ -138,7 +138,9 @@ function table(states) {
   }
   if (rows.length === 1) return "No saved workspaces. Run fission help to get started.";
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => safeText(row[i]).length)));
-  return rows.map((row) => row.map((cell, i) => safeText(cell).padEnd(widths[i])).join("  ")).join("\n");
+  const warnings = [...new Set(states.map((state) => providerWarning(state.provider)).filter(Boolean))];
+  return [...rows.map((row) => row.map((cell, i) => safeText(cell).padEnd(widths[i])).join("  ")),
+    ...warnings.map((warning) => `⚠ Provider history: ${warning}`)].join("\n");
 }
 
 async function main() {
