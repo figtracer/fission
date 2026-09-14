@@ -39,17 +39,21 @@ Usage: fission guide [TOPIC[/SECTION]]
 
 Equivalent to fission help guides or fission help TOPIC[/SECTION].
 Full guides and complete sections retain their original text.`,
-  capabilities: `Show provider capabilities and workload profiles as JSON.
+  capabilities: `Show providers, resource profiles, and workload guidance as JSON.
 
-Usage: fission capabilities
+Usage: fission capabilities [foundry|reth|tempo|base|bsc]
 
 Profiles describe resource floors, not readiness or performance guarantees.
+An ecosystem filters only workloads; providers, profiles, and units stay available.
+Workload status is dated evidence, not a live readiness check. Read a complete
+card with fission help ID, for example fission help workloads/foundry-symbolic.
 Use fission recipes for preparation recipes; fission machines for live offers.`,
   recipes: `Show preparation recipes as JSON.
 
 Usage: fission recipes
 
 linux, foundry, reth, tempo: shell, tools, or local development chains.
+foundry-symbolic: prebuilt Forge and Z3, with a matching Linux x86_64 VM profile.
 foundry-source, reth-source, tempo-source: pinned checkout and build tooling.
 reth-synced: Reth/Lighthouse snapshot and node tooling, not a ready synced node.
 See fission help harnesses/choose-a-harness.`,

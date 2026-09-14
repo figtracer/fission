@@ -9,6 +9,7 @@ Use the bundled [Fission skill](skills/fission/SKILL.md) for change-validation t
 Read the guide that matches the operation:
 
 - [Rental](docs/rental.md): before planning or purchasing; also covers funding, jobs, exports, and ambiguous outcomes.
+- [Workload cards](docs/workloads.md): use `capabilities [ECOSYSTEM]` to choose a stable ID, then `help ID` for prerequisites, result interpretation, and limitations. Prefer prebuilt tools for contract tests and compatible caches for unchanged clients.
 - [Harnesses](docs/harnesses.md): when choosing Foundry/Reth/Tempo preparation, compiling source, or defining a recipe.
 - [Synced Reth](docs/reth.md): before sizing or starting a Reth/Lighthouse snapshot workflow.
 
@@ -22,7 +23,7 @@ Read the guide that matches the operation:
 
 ## Working on Fission
 
-During private iteration, keep fixes in source without routine version bumps, tags, or GitHub releases. Prepare a clean 0.1.x release when the user requests publication.
+During private iteration, keep fixes in source without routine version bumps, tags, or GitHub releases. Stay on major zero; use minor increments when the user requests future publication. Existing historical prereleases remain unchanged.
 
 Consult Amp's built-in Oracle whenever guidance or planning help is needed, including consequential design decisions and unresolved technical questions. Use its advice to inform the plan, then verify and own the implementation. This does not authorize exporting private source through other services.
 

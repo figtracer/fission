@@ -53,7 +53,7 @@ test("root, command, and subcommand help resolve before required arguments or ac
 test("guides keep complete text and the compatibility entry point", async () => {
   const index = run(["help", "guides"]).stdout;
   assert.equal(index, run(["guide"]).stdout);
-  for (const topic of ["rental", "harnesses", "reth"]) {
+  for (const topic of ["rental", "harnesses", "reth", "workloads"]) {
     const source = await readFile(new URL(`../docs/${topic}.md`, import.meta.url), "utf8");
     assert.equal(run(["help", topic]).stdout, source + "\n");
     assert.equal(run(["guide", topic]).stdout, source + "\n");
@@ -110,4 +110,73 @@ test("saved machine, job and budget JSON remain usable without requests", async 
   assert.equal(budget.allocated, "2.500000");
   assert.equal(budget.availableToAllocate, "4.500000");
   assert.deepEqual(JSON.parse(await readFile(join(home, ".budget.json"), "utf8")), ledger);
+});
+
+test("workload IDs retrieve complete cards; filters preserve the existing capabilities envelope", async () => {
+  const all = JSON.parse(run(["capabilities"]).stdout);
+  const ids = all.workloads.map(({ id }) => id);
+  assert.equal(new Set(ids).size, 13);
+  const guideIds = run(["help", "guides"]).stdout.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("workloads/"));
+  assert.deepEqual(ids, guideIds);
+  const recipes = JSON.parse(run(["recipes"]).stdout).map(({ name }) => name);
+  for (const item of all.workloads) {
+    assert.ok(["validated", "unvalidated", "unavailable"].includes(item.status));
+    for (const id of item.related) assert.ok(ids.includes(id), `${item.id} -> ${id}`);
+    const card = run(["help", item.id]).stdout;
+    assert.equal((card.match(/^## /gm) || []).length, 1);
+    assert.match(card, /\]\(https:\/\//, "Each card must retain its source links");
+    if (item.status === "unavailable") {
+      assert.equal(item.recipe, null);
+      assert.equal(item.profile, null);
+      assert.match(card, /Unavailable/);
+    } else {
+      assert.ok(recipes.includes(item.recipe));
+      assert.ok(Object.hasOwn(all.profiles, item.profile));
+    }
+    if (item.status === "validated") assert.match(item.evidence, /^\d{4}-\d{2}-\d{2}: /);
+  }
+  for (const [ecosystem, count] of [["foundry", 3], ["reth", 3], ["tempo", 3], ["base", 2], ["bsc", 2]]) {
+    const selected = JSON.parse(run(["capabilities", ecosystem]).stdout);
+    assert.equal(selected.workloads.length, count);
+    assert.ok(selected.workloads.every((item) => item.ecosystem === ecosystem));
+    for (const key of ["providers", "profiles", "units"]) assert.deepEqual(selected[key], all[key]);
+  }
+  assert.match(run(["capabilities", "other"], 1).stderr, /Unknown ecosystem/);
+  assert.match(run(["capabilities", "base", "bsc"], 1).stderr, /Wrong arguments/);
+  for (const ecosystem of ["base", "bsc"]) {
+    const node = all.workloads.find(({ id }) => id === `workloads/${ecosystem}-node`);
+    assert.equal(node.status, "unavailable", "Fork support must not imply a full-node recipe");
+  }
+});
+
+test("symbolic preparation reuses Foundry and rejects incompatible planning before a request", async () => {
+  const { recipe } = await import("../src/workspace.mjs");
+  const ordinary = await recipe("foundry");
+  const symbolic = await recipe("foundry-symbolic");
+  assert.deepEqual(symbolic.prepare.slice(0, -1), ordinary.prepare);
+  assert.deepEqual(symbolic.readiness, [...ordinary.readiness, ["/workspace/z3", "--version"]]);
+  assert.notEqual(symbolic.digest, ordinary.digest);
+  assert.deepEqual(symbolic.artifacts, ["/workspace/symbolic-tools.json"]);
+  assert.equal(symbolic.afterCheckout, undefined, "Prebuilt tools must not require a source build");
+  const profile = JSON.parse(run(["capabilities", "foundry"]).stdout).profiles["foundry-symbolic"];
+  assert.deepEqual(profile, { os: "linux", kind: "vm", architecture: "x86_64" });
+  for (const [flag, value] of [["profile", "runtime"], ["arch", "aarch64"], ["kind", "sandbox"], ["os", "darwin"]])
+    assert.match(run(["plan", "symbolic", "--recipe", "foundry-symbolic", `--${flag}`, value], 1).stderr, /matching profile|conflicts with the profile/);
+  assert.match(run(["open", "symbolic", "--recipe", "foundry-symbolic"], 1).stderr, /requires a saved Linux x86_64 VM plan/);
+  const guard = spawnSync("python3", ["-c", `
+import io, runpy
+from unittest.mock import patch
+module = runpy.run_path(${JSON.stringify(fileURLToPath(new URL("../harness/foundry-symbolic.py", import.meta.url)))})
+for system, machine, libc, message in [('Darwin', 'x86_64', ('glibc', '2.39'), 'requires Linux'), ('Linux', 'aarch64', ('glibc', '2.39'), 'requires Linux'), ('Linux', 'x86_64', ('glibc', '2.38'), 'requires Linux'), ('Linux', 'x86_64', ('glibc', '2.39'), 'digest mismatch')]:
+    with patch('platform.system', return_value=system), patch('platform.machine', return_value=machine), patch('platform.libc_ver', return_value=libc), patch('urllib.request.urlopen', return_value=io.BytesIO(b'corrupt archive')) as request:
+        try:
+            module['main']()
+        except RuntimeError as error:
+            assert message in str(error), str(error)
+        else:
+            raise AssertionError('unsafe preparation accepted')
+        assert request.call_count == (1 if message == 'digest mismatch' else 0)
+`], { encoding: "utf8", timeout: 10000 });
+  assert.equal(guard.error, undefined);
+  assert.equal(guard.status, 0, guard.stderr);
 });

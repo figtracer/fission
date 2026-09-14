@@ -30,6 +30,7 @@ export const providers = [{
 // may be supplied. Full-node figures require rechecking snapshot expansion/growth.
 export const profiles = {
   runtime: { os: "linux", kind: "sandbox" },
+  "foundry-symbolic": { os: "linux", kind: "vm", architecture: "x86_64" },
   "foundry-source": { os: "linux", architecture: "x86_64", cpu: 4, memoryGiB: 16, diskGiB: 100 },
   "reth-source": { os: "linux", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 200 },
   "reth-synced": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 2048, p2p: true },
@@ -183,9 +184,9 @@ export async function createPlan(name, options) {
   if (options.from) options = await (await import("./experiments.mjs")).planOptions(options);
   const definition = await recipe(options.recipe || "linux");
   const recipeName = definition.name;
-  if (recipeName === "reth-synced") {
-    if (options.profile && options.profile !== "reth-synced") throw new Error("The synced-node recipe requires its matching profile.");
-    options.profile = "reth-synced";
+  if (["reth-synced", "foundry-symbolic"].includes(recipeName)) {
+    if (options.profile && options.profile !== recipeName) throw new Error(`The ${recipeName} recipe requires its matching profile.`);
+    options.profile = recipeName;
   }
   if (Object.hasOwn(sourceRecipes, recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");

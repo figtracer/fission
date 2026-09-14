@@ -20,7 +20,7 @@ export async function installSkill(output) {
   return { installed: destination, changed: true };
 }
 
-export const guideTopics = ["rental", "harnesses", "reth"];
+export const guideTopics = ["rental", "harnesses", "reth", "workloads"];
 
 export async function guide(name) {
   const [topic, section, extra] = name?.split("/") || [];
