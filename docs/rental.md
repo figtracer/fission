@@ -55,6 +55,8 @@ Preserve uncertain records. `fission reconcile NAME` recovers saved creation res
 
 If provisioning ended before bootstrap was recorded, observe the existing VM and explicitly `prepare NAME`. Recorded bootstrap jobs are observed, not replayed. Only `not_submitted`, written when the reservation boundary rejected a request before dispatch, permits replanning with that name. Before removing a stale operation lock, verify its PID has exited.
 
+A confirmed nonzero bootstrap command exit may be repaired once with `fission repair NAME --duration DURATION --approve`. Inspect the bootstrap log and saved `FISSION_HOME/NAME/jobs/bootstrap.json` spec first: a failed command may have partial side effects, and approval means repeating that command is safe. Repair resumes the recorded failed step onward in a separate `repair` job and reruns all original readiness probes. It preserves bootstrap and its log; only the repair job can then promote preparation to ready. Ordinary work stays blocked until that succeeds. Unknown launches, timeouts, supervisor errors, pending resize, and further repairs are rejected. Observe the existing repair even if submission fails; never clear its marker. Download its returned log separately before close (declared exports still include the original bootstrap log). Preparation reports are not portable workload reruns.
+
 A provider resize sets `resizePending` and blocks new work while status/recovery remain available. The earliest recorded expiry bounds work during migration. After completion, `observedResources` describes current provider capacity separately from the saved plan.
 
 ## Funding and receipts

@@ -34,6 +34,8 @@ Use `check*` or `prove*` property functions; `test*` functions remain ordinary t
 
 Save `bounds`, `assumptions`, solver identity/statistics, replay status and artifacts. Zero `smt_queries` means that property did not exercise the external solver. September 14 validation exercised three SMT queries for widened uint8 addition and confirmed `(0, 1)` as a counterexample to wrapping subtraction being <= its first operand. These synthetic properties do not establish general engine correctness.
 
+The same addition property also returned `incomplete` with an absent solver (`incomplete.kind = error`), an empty-response `/bin/true` solver (`error`), and `--symbolic-max-depth 1` (`stuck`). All three exited 1 with top-level `Failure`, no counterexample, and replay `not_required`; the normal Z3 run passed with three SMT queries. Exit 1 or `Failure` alone cannot distinguish infrastructure/exploration limits from a violated property. These checks did not test solver timeouts or every unsupported opcode.
+
 Related: [tests](#foundry-tests), [changed Foundry source](#foundry-source-build). Pinned implementation contracts: [Forge runner](https://github.com/foundry-rs/foundry/blob/v1.8.1/crates/forge/src/runner.rs), [structured results](https://github.com/foundry-rs/foundry/blob/v1.8.1/crates/forge/src/result.rs), [Z3 release](https://github.com/Z3Prover/z3/releases/tag/z3-5.1.0).
 
 ## Foundry source build
@@ -72,7 +74,17 @@ This card has no recorded workload proof yet. A local node does not establish pu
 
 Use recipe `foundry` and Forge's explicit `--network tempo` for contract tests against its Tempo EVM model. This option exists in pinned Forge 1.8.1; inspect that version's help/configuration and pin the target hardfork and project compiler. Do not infer Tempo behavior from a default Ethereum run.
 
-This route is unvalidated here. Test chain-specific precompiles and contract semantics with expected/actual assertions before promoting it. Forge simulation is not a Tempo node, transaction-envelope integration, or consensus test; use [Tempo development](#tempo-development) or [source tests](#tempo-source-build) for those layers. Record network/hardfork, versions, inputs and results. Reference: [Foundry](https://github.com/foundry-rs/foundry/tree/v1.8.1), [Tempo documentation](https://docs.tempo.xyz/).
+Forge 1.8.1 rejects `--hardfork`. Put the selection in the project's `foundry.toml`, under the selected profile; `forge config --root /workspace/project --json` should resolve both fields:
+
+```toml
+[profile.default]
+network = "tempo"
+hardfork = "tempo:T5"
+```
+
+Choose the hardfork for the change, not merely the latest name. September 14 validation on Linux x86_64, Forge 1.8.1 and Solidity 0.8.30 passed five assertions in both the default Tempo model and explicit T5: FeeManager `userTokens` zero sentinel, implicit approval of FeeManager but not an EOA, nonzero payment-channel domain separator, and absence at a neighboring address. Under explicit T4, the genesis FeeManager read still worked while the tested T5 registry selector and channel response were unavailable. This establishes those boundaries, not all Tempo precompiles or gas semantics.
+
+Require returned data length and decoded values: a static call to an empty Ethereum account can succeed with empty data. The Ethereum control verified this absence, and the identical positive FeeManager assertion failed on Ethereum. Keep such negative controls so an ignored network/hardfork cannot silently pass. Forge simulation is not a Tempo node, transaction-envelope integration, or consensus test; use [Tempo development](#tempo-development) or [source tests](#tempo-source-build) for those layers. Record network/hardfork, versions, inputs and results. References: [pinned precompile tests](https://github.com/foundry-rs/foundry/blob/982849d3140c01fd3b72905759581a132df7aa98/crates/forge/tests/cli/precompiles.rs), [Tempo documentation](https://docs.tempo.xyz/).
 
 ## Tempo source build
 
