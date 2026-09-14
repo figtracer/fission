@@ -8,12 +8,15 @@ Choose preparation by the work the machine must perform. Use `fission recipes` f
 |---|---|---|
 | Shell commands | `linux` | Workspace |
 | Foundry tools | `foundry` | Forge, Cast, Anvil, and Chisel |
+| Bounded symbolic properties | `foundry-symbolic` | Prebuilt Forge and Z3; [interpret results](workloads.md#foundry-symbolic) |
 | Reth development chain | `reth` | Private local chain |
 | Tempo development chain | `tempo` | Isolated chain on loopback port 8645 |
 | Compile a client | `foundry-source`, `reth-source`, `tempo-source` | Checkout, compiler, dependencies, and `/workspace/build` |
 | Reth with Lighthouse | `reth-synced` | Pinned tools and `/workspace/ethereum`; follow [Synced Reth](reth.md) |
 
 Runtime sandboxes have opportunistic capacity. Use a VM and explicit requirements for guaranteed resources or P2P. Development chains run privately on the guest; production network participation is a separate workload.
+
+Use `fission capabilities ECOSYSTEM` and [workload cards](workloads.md) for Foundry, Reth, Tempo, Base, and BSC test guidance. Base/BSC contract forks use prebuilt Foundry; full-node recipes are not yet available. Symbolic preparation requires a Linux x86_64 VM with glibc >= 2.39 and infers its matching profile.
 
 ## Source builds
 

@@ -1,11 +1,13 @@
 ---
 name: fission
-description: Rent temporary compute through MPP to validate a code change with Foundry, Reth, or Tempo, then return a timestamped report and close the machine.
+description: Rents temporary compute through MPP to validate changes with Foundry, Reth, or Tempo, including symbolic properties and Base/BSC contract forks. Use for bounded remote tests with evidence and cleanup.
 ---
 
 Turn the user's change, completion condition, and agreed budget into a remote run. Fission is the execution service; you choose the relevant workload and interpret its results.
 
-Use `fission guide` for the local topic index and retrieve relevant complete sections, such as `fission guide harnesses/readiness`. Read the full `fission guide rental` before purchasing and `fission guide reth` for snapshot-backed Reth/Lighthouse work. `fission help` gives command syntax; `fission capabilities`, `fission budget`, and `fission list --json` establish resources, retained authorization, and existing machines. Bare `fission` opens the optional human TUI.
+Use `fission help guides` for the local topic index and retrieve relevant complete sections, such as `fission help harnesses/readiness`. Read the full `fission help rental` before purchasing and `fission help reth` for snapshot-backed Reth/Lighthouse work. `fission help` gives command syntax; `fission capabilities`, `fission budget`, and `fission list --json` establish resources, retained authorization, and existing machines. Bare `fission` opens the optional human TUI.
+
+Choose a workload with `fission capabilities [foundry|reth|tempo|base|bsc]`, then read its complete card with `fission help ID`, such as `workloads/foundry-symbolic`. Check the evidence and prerequisites; availability is not readiness. Prefer prebuilt tools for contract tests and compatible compiled caches for unchanged clients. Distinguish symbolic proof, replay-confirmed counterexample and incomplete execution; Base/BSC forks are not full-node validation. Cards guide selection and interpretation, not autonomous vulnerability searches.
 
 Identify the exact revision or local patch, representative commands, and evidence that will answer the user's question. For performance claims, compare the relevant baseline and candidate under comparable conditions. Source builds, development chains, and fully synced nodes need different profiles. Keep hardware floors and snapshot sizing when no offer fits.
 

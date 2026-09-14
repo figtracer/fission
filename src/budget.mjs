@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { root, readJSON, writeJSON, fileLocked, list } from "./state.mjs";
 
 export function units(value) {
@@ -18,15 +19,34 @@ function summarize(ledger) {
   if (!ledger) throw new Error("Initialize an aggregate budget with budget --total-spend AMOUNT --approve.");
   const allocated = Object.values(ledger.allocations).reduce((sum, item) => sum + units(item), 0n);
   const reserved = Object.values(ledger.requests).reduce((sum, item) => sum + units(item.maximum), 0n);
-  return { limit: ledger.limit, allocated: amount(allocated), reserved: amount(reserved), availableToAllocate: amount(units(ledger.limit) - allocated), allocations: ledger.allocations, vmCaps: ledger.vmCaps || {} };
+  return { limit: ledger.limit, allocated: amount(allocated), reserved: amount(reserved), availableToAllocate: amount(units(ledger.limit) - allocated), allocations: ledger.allocations, vmCaps: ledger.vmCaps || {}, authorizationAmendments: ledger.authorizationAmendments || [] };
 }
 
-export async function budget(limit, { vmMaxSpend, profile } = {}) {
+export async function budget(limit, { vmMaxSpend, profile, raiseTo, approval } = {}) {
+  if (approval !== undefined && raiseTo === undefined) throw new Error("--approval requires --raise-to.");
+  if (raiseTo !== undefined && (limit !== undefined || vmMaxSpend !== undefined || profile !== undefined))
+    throw new Error("Record --raise-to separately from other budget changes.");
+  if (raiseTo !== undefined && !approval?.trim()) throw new Error("--raise-to requires --approval describing the user's new authorization.");
   // Atomic rename makes a read snapshot coherent. Observers must not compete
   // with the fail-fast authorization/reservation lock.
-  if (limit === undefined && vmMaxSpend === undefined) return summarize(await readJSON(path));
+  if (limit === undefined && vmMaxSpend === undefined && raiseTo === undefined) return summarize(await readJSON(path));
   return lock(async () => {
     const existing = await readJSON(path);
+    if (raiseTo !== undefined) {
+      if (!existing) throw new Error("Initialize the aggregate budget before recording an increase.");
+      const increase = units(raiseTo) - units(existing.limit);
+      if (increase <= 0n) throw new Error("--raise-to must exceed the current aggregate limit; a recorded increase cannot be replayed.");
+      const { allocations, requests, vmCaps } = existing;
+      const amendment = {
+        id: randomUUID(), recordedAt: new Date().toISOString(), previousLimit: existing.limit,
+        limit: raiseTo, approvedIncrease: amount(increase), userResponse: approval.trim(),
+        preservedHistorySha256: createHash("sha256").update(JSON.stringify({ allocations, requests, vmCaps })).digest("hex"),
+      };
+      existing.authorizationAmendments = [...(existing.authorizationAmendments || []), amendment];
+      existing.limit = raiseTo;
+      await writeJSON(path, existing);
+      return summarize(existing);
+    }
     if (limit !== undefined) {
       if (units(limit) <= 0n) throw new Error("Budget must be positive.");
       if (existing && units(limit) > units(existing.limit)) throw new Error("An authorization already exists. Preserve it; this command cannot increase or reset it.");

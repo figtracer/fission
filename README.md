@@ -19,6 +19,8 @@ The agent chooses a harness, checks quotes and budgets, runs the work, collects 
 ```sh
 fission
 fission help
+fission help plan
+fission help guides
 ```
 
 The TUI shows your machines, time remaining, spending, and transactions. Press `a` to browse available VMs and fetch quotes. A separate terminal is optional.

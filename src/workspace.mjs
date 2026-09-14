@@ -20,7 +20,13 @@ export const sourceRecipes = {
 export async function recipe(input = "linux") {
   let value;
   if (typeof input === "object" && input !== null) value = input;
-  else if (input === "reth-synced") {
+  else if (input === "foundry-symbolic") {
+    const { digest, ...foundry } = await recipe("foundry");
+    value = { ...foundry, name: input, description: "Prebuilt Foundry 1.8.1 and Z3 5.1.0 for bounded symbolic tests; Linux x86_64, glibc >= 2.39. No source build.",
+      prepare: [...foundry.prepare, ["python3", "-c", await readFile(new URL("../harness/foundry-symbolic.py", import.meta.url), "utf8")]],
+      readiness: [...foundry.readiness, ["/workspace/z3", "--version"]],
+      artifacts: ["/workspace/symbolic-tools.json"] };
+  } else if (input === "reth-synced") {
     const files = {};
     for (const name of ["ethereum-node.py", "ethereum-ready.py"])
       files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
@@ -85,6 +91,7 @@ export function duration(text) {
 
 export async function plan(name, options) {
   if (options.recipe === "reth-synced") throw new Error("The synced-node recipe requires capability matching through a saved plan.");
+  if (options.recipe === "foundry-symbolic") throw new Error("The symbolic recipe requires a saved Linux x86_64 VM plan.");
   directory(name);
   if (await readJSON(join(directory(name), "state.json")))
     throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");

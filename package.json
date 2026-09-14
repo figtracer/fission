@@ -11,6 +11,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "test": "node --test scripts/*.test.mjs",
     "build": "cargo build --manifest-path tui/Cargo.toml --release --locked",
     "setup": "npm run build && npm link --ignore-scripts && node src/cli.mjs skill install",
     "package": "npm run build && node scripts/package.mjs"
