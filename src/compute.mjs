@@ -12,11 +12,16 @@ const usableIP = (value) => isIP(value || "") && !["0.0.0.0", "::", "127.0.0.1",
 const credentials = (state) => join(directory(state.name), "compute-auth.json");
 
 export async function catalog() {
-  const response = await fetch(endpoint + "plans", { signal: AbortSignal.timeout(60000), redirect: "error" });
-  if (!response.ok) throw new Error(`Compute catalog HTTP ${response.status}.`);
-  const value = await response.json();
-  if (!Array.isArray(value.plans)) throw new Error("Invalid compute catalog.");
-  return value.plans;
+  // The default endpoint omits dedicated and GPU classes. Read every documented
+  // category before comparing offers; an incomplete catalog fails discovery.
+  const categories = await Promise.all(["vps", "vhp", "vdc", "vcg"].map(async (type) => {
+    const response = await fetch(endpoint + "plans?type=" + type, { signal: AbortSignal.timeout(60000), redirect: "error" });
+    if (!response.ok) throw new Error(`Compute ${type} catalog HTTP ${response.status}.`);
+    const value = await response.json();
+    if (!Array.isArray(value.plans)) throw new Error(`Invalid compute ${type} catalog.`);
+    return value.plans;
+  }));
+  return categories.flat();
 }
 
 export function machineCapabilities(machine) {
