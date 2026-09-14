@@ -24,7 +24,7 @@ Give your agent [AGENTS.md](AGENTS.md) or [llms.txt](llms.txt). Recipes cover Fo
 
 `reth-synced` prepares a Reth/Lighthouse controller for separate snapshot import, startup, readiness and candidate-restart jobs. It requires full-node capacity; live synced deployment remains unverified.
 
-**Available:** Linux x86 VMs through MPP-funded Vultr, prepaid for 24 hours, with SSH and provider expiry. Modal supplies shorter Linux sandboxes with opportunistic capacity. Foundry release compilation has been exercised on a VM; full Reth/Tempo source builds and synced Reth/Lighthouse deployment remain unverified. Full Reth retains its 32 GiB RAM and 2 TiB disk floor; no affordable compatible offer is verified.
+**Available:** Linux x86 VMs through MPP-funded Vultr, prepaid for 24 hours, with SSH and provider expiry. Modal supplies shorter Linux sandboxes with opportunistic capacity. Foundry and Tempo source builds have been exercised on VMs; full Reth source builds and synced Reth/Lighthouse deployment remain unverified. Full Reth retains its 32 GiB RAM and 2 TiB disk floor; no affordable compatible offer is verified.
 
 **Budgets:** planning pays nothing. `--cheapest` compares up to three compatible quotes from one provider; `machines` shows the sample and average. `--budget` covers the workspace allocation, with creation capped at its saved quote. Price increases stop purchase. Hardware floors and spending ceilings remain binding; network fees are separate. Closed allocations and failed request caps stay in the ledger.
 

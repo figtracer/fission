@@ -23,9 +23,11 @@ export async function recipe(input = "linux") {
     const files = {};
     for (const name of ["ethereum-node.py", "ethereum-ready.py"])
       files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
-    value = { name: input, description: "Prepare pinned Reth/Lighthouse tools for an explicit full mainnet snapshot and node workflow. Bootstrap does not import data or start nodes.",
+    value = { name: input, description: "Prepare pinned Reth/Lighthouse tools and permit their P2P ports through UFW. Bootstrap does not import data or start nodes.",
       prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
-        ["python3", "/workspace/.fission/ethereum-node.py", "install"]],
+        ["python3", "/workspace/.fission/ethereum-node.py", "install"],
+        ...["30303/tcp", "30303/udp", "9000/tcp", "9000/udp", "9001/udp"].map((port) => ["ufw", "allow", port]),
+        ["ufw", "status", "verbose"]],
       readiness: [["/workspace/.fission/clients/reth-2.5.2", "--version"], ["/workspace/.fission/clients/lighthouse-8.2.2", "--version"]],
       artifacts: ["/workspace/ethereum-tools.json"] };
   } else {
