@@ -22,4 +22,6 @@ Read the guide that matches the operation:
 
 ## Working on Fission
 
+During private iteration, keep fixes in source without routine version bumps, tags, or GitHub releases. Prepare a clean 0.1.x release when the user requests publication.
+
 The Node backend owns plans, payments, durable state, jobs, and lifecycle operations. The Rust TUI uses that backend; Python harnesses run on the guest. Keep these ownership boundaries and the single-repository layout. Keep the README brief, command syntax in `fission help`, and operational detail in the relevant guide. Changes to code-enforced spending, replay, or readiness boundaries require an explicit behavior decision.
