@@ -97,14 +97,18 @@ Native source workload validation passed; that does not establish public-network
 Use recipe `foundry` to test your contracts against RPC-reported Base state without building a Base client. Supply an endpoint with historical state support. Check `eth_chainId == 8453`; record a finalized block number and hash from that endpoint, then run:
 
 ```sh
-fission run NAME base-tests --duration 10m -- /workspace/forge test --root /workspace/project --match-contract BaseTests --fork-url https://mainnet.base.org --fork-block-number BLOCK --json
+fission run NAME base-tests --duration 10m -- /workspace/forge test --root /workspace/project --match-contract BaseTests --network optimism --fork-url https://mainnet.base.org --fork-block-number BLOCK --json
 ```
 
 Replace `BLOCK` with the recorded number, verify each expected test passed and its `fork_block_number` matches, and retain endpoint/block/hash plus logs. Public endpoints have rate and history limits; unavailable state is an RPC limitation, not a contract verdict. Do not put secret RPC tokens in argv.
 
-September 14 validation checked chain identity, WETH bytecode and decimals at block 51,301,993. This is a narrow state-read smoke test, not Base-specific execution coverage. Select and verify the pinned Forge's network/hardfork model for OP-specific behavior; there is no `--network base` option. Fork simulation does not validate the sequencer, L1 derivation, bridge finality or consensus. The RPC provider remains the state trust boundary.
+Forge 1.8.1 inferred the Optimism model from Base's endpoint identity when no network was selected; an explicit `--network ethereum` retained chain ID 8453 but changed execution rules. Neither chain ID nor a passing Ethereum override establishes OP behavior. There is no `--network base`, and the test JSON does not identify the resolved execution model. Pin the intended hardfork in `foundry.toml` (not a `--hardfork` flag), for example `hardfork = "optimism:isthmus"` under `[profile.default]`. That example is a selected model, not a claim that Isthmus matches every Base block.
 
-Related: [tests](#foundry-tests), [Base node](#base-node). Reference: [Base network information](https://docs.base.org/base-chain/network-information).
+September 14 validation at block **51,307,369** distinguished inferred/explicit OP from explicit Ethereum: OP rejected a 112,896-byte BN254 pairing input that Ethereum accepted; valid/invalid P256 inputs returned 1/empty data. Pinned Isthmus accepted P256 with 5,000 gas. Offline Ecotone lacked P256 and the pairing cap, while Ethereum Osaka required more than 5,000 gas for the valid P256 call. These are selected behavioral controls, not complete hardfork or gas validation.
+
+**Choose call isolation deliberately.** This binary defaults to `isolate = true`. A fixture funded with exactly its 1 ETH deposit reverted before WETH code executed under both default OP and pinned Isthmus; its identical Ethereum run passed. With `--network optimism --no-isolate` and pinned Isthmus, the same fixture deposited 1 ETH, transferred 0.4 WETH, withdrew 0.6 ETH, and verified both token balances and the wrapper reserve while the OP controls still passed. Isolation runs top-level calls as separate transactions; OP fees can require additional caller balance. The exact underlying validation error was hidden by the revert. Use `--no-isolate` for deliberately selected contract-call tests, not as an automatic workaround for fee/transaction tests. Keep failed controls and do not switch to Ethereum just to obtain a pass.
+
+Fork simulation does not validate the sequencer, L1 derivation, bridge finality or consensus. RPC state remains trusted input. Related: [tests](#foundry-tests), [Base node](#base-node). References: [Base network information](https://docs.base.org/base-chain/network-information), [pinned network inference](https://github.com/foundry-rs/foundry/blob/982849d3140c01fd3b72905759581a132df7aa98/crates/evm/core/src/opts.rs), [isolated-call executor](https://github.com/foundry-rs/foundry/blob/982849d3140c01fd3b72905759581a132df7aa98/crates/evm/evm/src/inspectors/stack.rs).
 
 ## Base node
 
@@ -114,17 +118,19 @@ Readiness must cover Base chain identity, derivation and safe/finalized progress
 
 ## BSC contract fork
 
-Use recipe `foundry` for your contracts against RPC-reported BSC state. Supply historical-state RPC access; verify `eth_chainId == 56` and record a finalized block number and hash before running:
+Use recipe `foundry` for your contracts against RPC-reported BSC state, subject to its Ethereum-model limitations below. Supply historical-state RPC access; verify `eth_chainId == 56` and record a finalized block number and hash before running:
 
 ```sh
-fission run NAME bsc-tests --duration 10m -- /workspace/forge test --root /workspace/project --match-contract BscTests --fork-url https://bsc-dataseed.binance.org --fork-block-number BLOCK --json
+fission run NAME bsc-tests --duration 10m -- /workspace/forge test --root /workspace/project --match-contract BscTests --network ethereum --fork-url https://bsc-dataseed.binance.org --fork-block-number BLOCK --json
 ```
 
 Replace `BLOCK`, require expected test names and successful assertions with matching `fork_block_number`, and retain the endpoint/block/hash and logs. Missing state or rate limits are RPC failures, not contract findings. Keep secret endpoint tokens out of persisted argv.
 
-September 14 validation checked chain identity, WBNB bytecode and decimals at block 121,850,174. This narrow state-read test does not establish BSC-specific opcode/precompile compatibility or Parlia consensus. Forge 1.8.1 has no `--network bsc`; explicitly assess model limitations for your contract. Public RPC state is not independently verified by this harness.
+Forge 1.8.1 has no `--network bsc` (the CLI rejects it). Its inferred model accepted the Ethereum pairing input and treated BSC-native precompile addresses `0x64`–`0x69` as empty accounts: calls succeeded with empty returndata. At the same block the public BSC endpoint rejected the empty call to `0x64` with `deprecated`, while its identity-precompile control returned the expected bytes. This is an observed RPC-versus-simulation discrepancy; the other five native addresses were not compared with live RPC. Reading BSC state does not supply BSC's precompile implementations or hardfork rules. Do not validate contracts depending on those semantics through this route.
 
-Related: [tests](#foundry-tests), [BSC node](#bsc-node). Reference: [BNB Chain documentation](https://docs.bnbchain.org/).
+September 14 validation at block **121,873,529** passed the WBNB 1 BNB deposit / 0.4 WBNB transfer / 0.6 BNB withdrawal assertions, including recipient balance and wrapper reserve, under the inferred Ethereum model. System-contract code at `0x1000` was readable. This validates that fixture's execution over forked state, not BSC-specific execution compatibility or Parlia consensus. Record the Ethereum hardfork and isolation settings used; no BSC schedule is implied by chain ID 56. Public RPC state is not independently verified by this harness.
+
+Related: [tests](#foundry-tests), [BSC node](#bsc-node). References: [BNB Chain documentation](https://docs.bnbchain.org/), [BSC precompile map](https://github.com/bnb-chain/bsc/blob/edb32e784cc3fc87a18b295d6cdb7d21430ff53a/core/vm/contracts.go).
 
 ## BSC node
 
