@@ -9,4 +9,4 @@
 - [Synced Reth](docs/reth.md): snapshot sizing, checkpoint selection, and node readiness.
 - [Install](README.md): build and open the Rust TUI.
 
-Use `fission help` for command syntax and `fission capabilities` for structured profiles.
+Use `fission guide` for the local topic index, then `fission guide TOPIC/SECTION` for the relevant complete section. Use `fission help` for command syntax and `fission capabilities` for structured profiles.

@@ -17,7 +17,7 @@ Terminal
   tmux                            Open the TUI with managed SSH windows (requires tmux)
   help                            Show this command reference
   skill install [--output DIR]    Install the agent skill (default: ~/.agents/skills/fission)
-  guide rental|harnesses|reth      Read a bundled workflow guide
+  guide [TOPIC[/SECTION]]         List topics or read a complete guide section
   ui                              Open the TUI (alias)
 
 Machines and budgets
@@ -200,7 +200,7 @@ async function main() {
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
     throw new Error("Watch spending cap requires --refresh.");
-  const arity = { skill: 2, guide: 2, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: 1, help: 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission --help.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));

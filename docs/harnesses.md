@@ -2,6 +2,8 @@
 
 Choose preparation by the work the machine must perform. Use `fission recipes` for recipe details and `fission capabilities` for current hardware profiles. Apply the [rental workflow](rental.md) to purchase, run, and close.
 
+## Choose a harness
+
 | Work | Recipe | Result of bootstrap |
 |---|---|---|
 | Shell commands | `linux` | Workspace |

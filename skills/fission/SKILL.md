@@ -5,7 +5,7 @@ description: Rent temporary compute through MPP to validate a code change with F
 
 Turn the user's change, completion condition, and agreed budget into a remote run. Fission is the execution service; you choose the relevant workload and interpret its results.
 
-Use `fission help` for commands. Read `fission guide rental` before purchasing, `fission guide harnesses` to select preparation, and `fission guide reth` for snapshot-backed Reth/Lighthouse work. `fission capabilities`, `fission budget`, and `fission list --json` establish available resources, retained authorization, and existing machines. Bare `fission` opens the optional human TUI.
+Use `fission guide` for the local topic index and retrieve relevant complete sections, such as `fission guide harnesses/readiness`. Read the full `fission guide rental` before purchasing and `fission guide reth` for snapshot-backed Reth/Lighthouse work. `fission help` gives command syntax; `fission capabilities`, `fission budget`, and `fission list --json` establish resources, retained authorization, and existing machines. Bare `fission` opens the optional human TUI.
 
 Identify the exact revision or local patch, representative commands, and evidence that will answer the user's question. For performance claims, compare the relevant baseline and candidate under comparable conditions. Source builds, development chains, and fully synced nodes need different profiles. Keep hardware floors and snapshot sizing when no offer fits.
 
