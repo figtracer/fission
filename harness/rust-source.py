@@ -14,6 +14,29 @@ import urllib.request
 TOOLCHAIN = '1.96.1'
 
 
+def prepare_reth(env):
+    # Current Reth's default JIT uses llvm-sys 221 and its GMP build needs m4.
+    release = platform.freedesktop_os_release()
+    if release.get('ID') != 'ubuntu' or release.get('VERSION_ID') != '24.04':
+        raise RuntimeError('Reth source preparation requires Ubuntu 24.04 for LLVM 22 packages')
+    subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'gnupg', 'm4'], env=env, check=True)
+    key = urllib.request.urlopen('https://apt.llvm.org/llvm-snapshot.gpg.key', timeout=60).read()
+    with tempfile.TemporaryDirectory() as directory:
+        keyfile = pathlib.Path(directory) / 'llvm.asc'
+        keyfile.write_bytes(key)
+        details = subprocess.check_output(['gpg', '--homedir', directory, '--batch', '--with-colons', '--show-keys', str(keyfile)], text=True)
+        fingerprint = next(line.split(':')[9] for line in details.splitlines() if line.startswith('fpr:'))
+        if fingerprint != '6084F3CF814B57C1CF12EFD515CF4D18AF4F7421':
+            raise RuntimeError('LLVM package signing key fingerprint mismatch')
+    keyring = pathlib.Path('/usr/share/keyrings/fission-llvm.asc')
+    keyring.write_bytes(key)
+    keyring.chmod(0o644)
+    pathlib.Path('/etc/apt/sources.list.d/fission-llvm.list').write_text(
+        'deb [arch=amd64 signed-by=/usr/share/keyrings/fission-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main\n')
+    subprocess.run(['apt-get', 'update'], env=env, check=True)
+    subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'llvm-22-dev', 'libpolly-22-dev'], env=env, check=True)
+
+
 def main():
     root = pathlib.Path('/workspace')
     mode, *binaries = sys.argv[1:]
@@ -33,6 +56,8 @@ def main():
     env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'CARGO_HOME': str(cargo_home),
            'RUSTUP_HOME': str(root / '.rustup'), 'RUSTUP_TOOLCHAIN': TOOLCHAIN,
            'CARGO_TARGET_DIR': str(source / 'target'), 'PATH': f'{cargo_home}/bin:' + os.environ['PATH']}
+    if binaries == ['reth']:
+        env['LLVM_SYS_221_PREFIX'] = '/usr/lib/llvm-22'
     if mode == 'build':
         command = [str(cargo_home / 'bin' / 'cargo'), 'build', '--locked', '--release']
         for binary in binaries:
@@ -64,6 +89,8 @@ def main():
     subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends',
                     'build-essential', 'clang', 'libclang-dev', 'pkg-config',
                     'libssl-dev', 'cmake', 'protobuf-compiler', 'ca-certificates'], env=env, check=True)
+    if binaries == ['reth']:
+        prepare_reth(env)
     # Pin the installer and compiler independently of future upstream defaults.
     url = 'https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init'
     data = urllib.request.urlopen(url, timeout=120).read()
