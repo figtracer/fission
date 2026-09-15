@@ -203,7 +203,10 @@ export async function supervise(name) {
           }
           // Preserve the earlier unresolved report on disk, but generate a new
           // final report after this observation actually confirms cleanup.
-          await update(name, (task) => { delete task.report; });
+          await update(name, (task) => {
+            delete task.report;
+            if (task.lastError?.startsWith("Cleanup remains unconfirmed.")) delete task.lastError;
+          });
         } else if (step === "prepare") await prepare(name);
         else if (["bootstrap", "preparation", "work"].includes(step)) await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true);
         else if (step === "upload") {
