@@ -1,28 +1,20 @@
-# fission
+# Fission
 
-Temporary compute for your coding agent. Quote a machine, pay through MPP with Tempo, and close it when the task is done.
-
-## Install
-
-Install a [prebuilt release](docs/install.md) for macOS or Linux, including the agent skill. Requires Node ≥22.13, SSH, a configured Tempo CLI wallet, and repository access. [Source setup](docs/install.md#from-source) is also available.
-
-## Use
-
-Start an agent session in your project and ask:
-
-> Use Fission to validate this change with Foundry. Spend at most 5 USDC, return the measurements and report, and close the machine when finished.
-
-The agent chooses a harness, checks quotes and budgets, runs the work, collects evidence, and closes the machine. Reports land in `fission/<machine>/<UTC timestamp>-<run>/run.md`, alongside structured data and the attached log.
-
-## Terminal
+Fission runs one bounded task on temporary Linux compute. Its Foundry, Reth, and Tempo harnesses select resources, prepare and check the environment, run an argv, collect evidence, and request confirmed cleanup. Plain Linux is the fallback. No coding agent or LLM runs on the guest.
 
 ```sh
-fission
-fission help
-fission help plan
-fission help guides
+# Preview: quotes and records a plan, but pays nothing.
+fission run check-a --harness foundry --budget AMOUNT --duration 2h \
+  --work-duration 10m --region ams --input ./check.sh -- bash /workspace/check.sh
+
+# Execute the reviewed plan within existing authorization.
+fission run check-a --harness foundry --budget AMOUNT --duration 2h \
+  --work-duration 10m --region ams --input ./check.sh --approve -- bash /workspace/check.sh
+
+fission status check-a --wait 10m
+fission stop check-a
 ```
 
-The TUI shows your machines, time remaining, spending, and transactions. Press `a` to browse available VMs and fetch quotes. A separate terminal is optional.
+Bare `fission` opens the Rust task dashboard. `run`, `status`, `stop`, `help`, and `budget` are the normal interface; recovery and retained-data operations live under `fission advanced`.
 
-See [the agent skill](skills/fission/SKILL.md) and [rental workflow](docs/rental.md).
+Start with `fission help run`, then [harness selection](docs/harnesses.md), [rental safety](docs/rental.md), or the [synced Ethereum reference](docs/reth.md). See [installation](docs/install.md) for the source-first workflow while releases are paused.

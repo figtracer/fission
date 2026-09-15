@@ -1,13 +1,23 @@
 # Fission
 
-> Temporary compute for your coding agent, paid through MPP with Tempo.
+> Managed, bounded Linux runs for Foundry, Reth, Tempo, and a plain Linux fallback. The coding agent remains local; no LLM runs on the VM.
 
-- [Agent skill](skills/fission/SKILL.md): validate a change, collect evidence, and return a timestamped report.
-- [Agent entry point](AGENTS.md): task completion, authorization, and repository boundaries.
-- [Rental](docs/rental.md): quotes, budgets, funding, jobs, exports, and recovery.
-- [Workload cards](docs/workloads.md): indexed Foundry, symbolic execution, Reth, Tempo, Base and BSC capabilities with prerequisites, evidence boundaries, and related tasks.
-- [Harnesses](docs/harnesses.md): Foundry, Reth, Tempo, source builds, readiness, local preservation, portable experiments, and custom recipes.
-- [Synced Reth](docs/reth.md): snapshot sizing, checkpoint selection, and node readiness.
-- [Install](README.md): build and open the Rust TUI.
+Normal interface:
+- `fission` — Rust task dashboard
+- `fission run NAME ... -- ARGV` — preview by default; `--approve` executes
+- `fission status [NAME] [--resume] [--wait DURATION]`
+- `fission stop NAME`
+- `fission budget`
+- `fission help COMMAND`
 
-Use `fission help guides` for the local topic index, then `fission help TOPIC/SECTION` for the relevant complete section. Use `fission help` for command syntax and `fission capabilities [ECOSYSTEM]` for structured profiles and workload IDs.
+Everything manual or low-level is `fission advanced COMMAND`.
+
+Documentation:
+- [README](README.md)
+- [Harnesses](docs/harnesses.md)
+- [Rental safety and recovery](docs/rental.md)
+- [Synced Ethereum with Reth/Lighthouse](docs/reth.md)
+- [Installation](docs/install.md)
+- [Agent skill](skills/fission/SKILL.md)
+
+Preview before approval. Preserve retained accounting and ambiguous outcomes. A local sleep pauses supervision but not remote deadlines. Cleanup is complete only when provider termination is confirmed.

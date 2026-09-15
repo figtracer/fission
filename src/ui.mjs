@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export async function ui() {
   if (!process.stdin.isTTY || !process.stdout.isTTY)
-    throw new Error("Open fission in an interactive terminal. Use fission help for commands or fission list --json for agents.");
+    throw new Error("Open fission in an interactive terminal. Use fission help for commands or fission status --json for agents.");
   const binary = fileURLToPath(new URL("../tui/target/release/fission-tui", import.meta.url));
   try { await access(binary); }
   catch { throw new Error("Build the Rust TUI with npm run build in the Fission repository, then run fission."); }

@@ -176,7 +176,7 @@ export async function machineOffers(options) {
     note: offers.length ? "Capacity and inventory are provider catalog claims; plan and open re-quote before payment. Leave allocation room for lifecycle operations." : "No verified quote within the ceiling. Requirements and budget were preserved." };
 }
 
-export async function createPlan(name, options) {
+export async function createPlan(name, options, task) {
   directory(name);
   const previous = await readJSON(join(directory(name), "state.json"));
   if (previous && previous.phase !== "not_submitted") throw new Error("Workspace name already recorded.");
@@ -273,6 +273,7 @@ export async function createPlan(name, options) {
   if (options.budget !== undefined) creationCap = offer.amount;
   const lease = quotedLease(rental?.lease, offer.amount);
   const value = { version: 1, status: "planned", id: randomUUID(), name, project: basename(process.cwd()), profile, requirements, provider, providerWarning: providerWarning(provider), kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
+  if (task) value.task = task;
   value.digest = digest(value);
   await writeJSON(planFile(value.id), value);
   return { ...value, paymentSubmitted: false, open: ["fission", "open", name, "--plan", value.id, "--approve"],

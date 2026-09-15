@@ -226,7 +226,9 @@ export async function prepareLease(state) {
     return false;
   }
   if (state.resizePending || state.observedMachine !== state.machine.id || !["active", "running"].includes(state.providerStatus)) return false;
-  const minimumRemaining = state.preparationAcceptance?.minimumSeconds ?? state.durationSeconds;
+  const minimumRemaining = state.task
+    ? Math.max(60, Math.ceil((state.task.deadline - Date.now()) / 1000))
+    : state.preparationAcceptance?.minimumSeconds ?? state.durationSeconds;
   if (!Number.isSafeInteger(minimumRemaining) || minimumRemaining < 60 || minimumRemaining > state.durationSeconds)
     throw new Error("Invalid accepted remaining-time minimum.");
   for (const key of ["cpu", "memoryGiB", "diskGiB"])
@@ -235,6 +237,15 @@ export async function prepareLease(state) {
   if (Date.parse(state.providerExpiresAt) - Date.now() < minimumRemaining * 1000)
     throw new Error("Migration left less than the requested target lease. Inspect or close this machine.");
   await prepareAccess(state);
+  await verifyGuest(state);
+  if (Date.parse(state.providerExpiresAt) - Date.now() < minimumRemaining * 1000)
+    throw new Error("Insufficient target lease remains for preparation and work.");
+  state.leasePhase = "verified";
+  await save(state);
+  return true;
+}
+
+export async function verifyGuest(state) {
   const probe = "import json,os,platform; s=os.statvfs('/'); m=int(next(x.split()[1] for x in open('/proc/meminfo') if x.startswith('MemTotal:')))*1024; print(json.dumps({'architecture':platform.machine(),'cpu':os.cpu_count(),'memoryBytes':m,'diskBytes':s.f_blocks*s.f_frsize,'freeBytes':s.f_bavail*s.f_frsize}))";
   const result = await computeRequest(state, "exec", { command: ["python3", "-c", probe] }, randomUUID());
   if (result.returncode !== 0) throw new Error("Guest capacity observation failed.");
@@ -244,10 +255,6 @@ export async function prepareLease(state) {
       // Provider RAM is nominal GiB; usable pages exclude firmware/kernel reserve.
       Math.ceil(guest.memoryBytes / 2 ** 30) < (required.memoryGiB || 1))
     throw new Error("Guest capacity does not satisfy the workload. Inspect or close the machine.");
-  if (Date.parse(state.providerExpiresAt) - Date.now() < minimumRemaining * 1000)
-    throw new Error("Insufficient target lease remains for preparation and work.");
   state.guestResources = { ...guest, observedAt: new Date().toISOString() };
-  state.leasePhase = "verified";
   await save(state);
-  return true;
 }

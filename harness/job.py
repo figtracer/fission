@@ -15,6 +15,10 @@ deadline = spec["deadline"]
 state = {"id": spec["id"], "phase": "running", "startedAt": time.time(), "step": 0}
 
 
+class Cancelled(Exception):
+    pass
+
+
 def save():
     temporary = root / "status.tmp"
     with temporary.open("w") as file:
@@ -33,11 +37,20 @@ def run(command, log):
     state["pid"] = process.pid
     save()
     try:
-        return process.wait(timeout=remaining)
-    except subprocess.TimeoutExpired:
+        while True:
+            if (root / 'cancel').exists():
+                raise Cancelled('Stop requested')
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError('Job deadline reached')
+            try:
+                return process.wait(timeout=min(1, remaining))
+            except subprocess.TimeoutExpired:
+                pass
+    except (Cancelled, TimeoutError):
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
-        raise TimeoutError("Job deadline reached")
+        raise
 
 
 try:
@@ -53,11 +66,20 @@ try:
             environment['source'] = {'error': str(error)}
     state['environment'] = environment
     save()
+    if spec.get('checks'):
+        checks = dict(spec['checks'], deadline=min(deadline, time.time() + 120))
+        with (root / 'readiness.json').open('wb') as output:
+            code = run(['python3', '-c', spec['checkRunner'], json.dumps(checks)], output)
+        state['readiness'] = json.loads((root / 'readiness.json').read_text())
+        save()
+        if code or state['readiness'].get('ready') is not True:
+            raise RuntimeError('Fresh harness readiness failed; workload not executed')
     with (root / "output.log").open("ab", buffering=0) as log:
         for index, command in enumerate(spec["commands"]):
-            state.update(phase="running", step=index)
+            state.update(phase="running", step=index, stepStartedAt=time.time())
             save()
             code = run(command, log)
+            state.setdefault('steps', []).append({'index': index, 'startedAt': state['stepStartedAt'], 'finishedAt': time.time(), 'returncode': code})
             if code:
                 state.update(phase="failed", returncode=code)
                 break
@@ -76,6 +98,8 @@ try:
                     raise TimeoutError("Readiness deadline reached")
                 time.sleep(min(spec["pollSeconds"], remaining))
             state.update(phase="succeeded", returncode=0)
+except Cancelled as error:
+    state.update(phase="cancelled", error=str(error))
 except TimeoutError as error:
     state.update(phase="timed_out", error=str(error))
 except Exception as error:

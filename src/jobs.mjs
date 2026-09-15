@@ -12,7 +12,7 @@ const jobPath = (name, id) => {
   return join(directory(name), "jobs", `${id}.json`);
 };
 const remotePath = (id) => `/workspace/.fission/jobs/${id}`;
-export const jobDone = (job) => ["succeeded", "failed", "timed_out", "workspace_terminated"].includes(job.phase);
+export const jobDone = (job) => ["succeeded", "failed", "cancelled", "timed_out", "workspace_terminated"].includes(job.phase);
 
 export async function launch(state, id, commands, seconds, readiness = [], cwd = "/workspace") {
   const file = jobPath(state.name, id);
@@ -22,9 +22,15 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   for (const command of [...commands, ...readiness])
     if (!Array.isArray(command) || !command.length || command.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Job commands must be nonempty argv arrays.");
-  const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000);
+  const taskDeadline = state.task ? (state.task.deadline / 1000 - state.task.timing.cleanupSeconds) : Infinity;
+  const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000, taskDeadline);
   if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("Insufficient estimated lease time for a new job.");
   const spec = { id, commands, readiness, cwd, deadline, pollSeconds: 15 };
+  if (state.task && id === "work") {
+    const { probes } = await import("./readiness.mjs");
+    spec.checks = { scope: state.task.scope, checks: probes(state.recipe, state.task.scope, state.task.maxHeadAge) };
+    spec.checkRunner = await readFile(new URL("../harness/readiness.py", import.meta.url), "utf8");
+  }
   const runnerBytes = await readFile(runner);
   const job = { runnerSha256: createHash("sha256").update(runnerBytes).digest("hex"), id, name: state.name, phase: "launch_unknown", requestId: randomUUID(), spec, digest: createHash("sha256").update(JSON.stringify(spec)).digest("hex"), log: `${remotePath(id)}/output.log` };
   await writeJSON(file, job);
@@ -78,7 +84,7 @@ export async function getJob(name, id, refresh = false, options = {}) {
     const result = await execute(state, ["python3", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.read_text() if p.exists() else '{\"phase\":\"launch_unknown\"}')", `${dirname(job.log)}/status.json`], operationCap, undefined, options);
     if (result.returncode) throw new Error("Could not observe remote job. Saved job remains unresolved.");
     const observation = JSON.parse(result.stdout);
-    if (!["launch_unknown", "running", "waiting", "failed", "succeeded", "timed_out"].includes(observation.phase)) throw new Error("Invalid remote job status.");
+    if (!["launch_unknown", "running", "waiting", "failed", "succeeded", "cancelled", "timed_out"].includes(observation.phase)) throw new Error("Invalid remote job status.");
     job.phase = observation.phase;
     job.observation = observation;
     job.observedAt = new Date().toISOString();

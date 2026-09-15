@@ -1,125 +1,56 @@
 # Harnesses
 
-Choose preparation by the work the machine must perform. Use `fission recipes` for recipe details and `fission capabilities` for current hardware profiles. Apply the [rental workflow](rental.md) to purchase, run, and close.
-
-## Choose a harness
-
-| Work | Recipe | Result of bootstrap |
-|---|---|---|
-| Shell commands | `linux` | Workspace |
-| Foundry tools | `foundry` | Forge, Cast, Anvil, and Chisel |
-| Bounded symbolic properties | `foundry-symbolic` | Prebuilt Forge and Z3; [interpret results](workloads.md#foundry-symbolic) |
-| Reth development chain | `reth` | Private local chain |
-| Tempo development chain | `tempo` | Isolated chain on loopback port 8645 |
-| Compile a client | `foundry-source`, `reth-source`, `tempo-source` | Checkout, compiler, dependencies, and `/workspace/build` |
-| Reth with Lighthouse | `reth-synced` | Pinned tools and `/workspace/ethereum`; follow [Synced Reth](reth.md) |
-
-Runtime sandboxes have opportunistic capacity. Use a VM and explicit requirements for guaranteed resources or P2P. Development chains run privately on the guest; production network participation is a separate workload.
-
-Use `fission capabilities ECOSYSTEM` and [workload cards](workloads.md) for Foundry, Reth, Tempo, Base, and BSC test guidance. Base/BSC contract forks use prebuilt Foundry; full-node recipes are not yet available. Symbolic preparation requires a Linux x86_64 VM with glibc >= 2.39 and infers its matching profile.
-
-## Source builds
-
-Source recipes require `--repo https://github.com/OWNER/REPO --ref FULL_COMMIT` and select their matching hardware profile. Resolve a PR to its exact 40-character head SHA. The checkout verifies HEAD and records submodules. Upload private source explicitly, keeping GitHub and wallet credentials local.
-
-Bootstrap installs pinned Rust 1.96.1 and native dependencies. Run the build separately:
+Every harness uses the same managed contract:
 
 ```sh
-fission run NAME build --duration 1h -- /workspace/build
+fission run NAME --harness HARNESS --mode MODE --budget AMOUNT \
+  --duration TOTAL --work-duration WORK --region REGION [OPTIONS] -- ARGV
 ```
 
-Choose a job duration within the remaining lease. The helper builds the selected release executables with `--locked`, preserves upstream default features, and copies successful binaries into `/workspace`. `/workspace/build.json` records the commit, local changes, toolchain, versions, and hashes. Download it and required binaries explicitly; automatic close exports include source preparation provenance and bootstrap output.
+Without `--approve`, this is a non-paying preview. The approved run prepares and checks the selected environment, runs argv without shell reinterpretation, exports declared evidence, reports, and cleans up. Defaults are the first listed mode: Foundry `tools`, Reth `dev`, Tempo `dev`, and Linux `tools`.
 
-The wrappers `/workspace/cargo`, `/workspace/rustc`, and `/workspace/rustup` work without shell activation. Pass `--manifest-path /workspace/source/Cargo.toml` when invoking Cargo outside the checkout. A failed build leaves the workspace available for diagnosis and a separately named follow-up job. Toolchain or feature changes are explicit decisions; saved plans retain their embedded preparation.
+TOTAL must cover 30m provisioning + preparation (10m prebuilt, 1h build, or 4h synced) + WORK + 15m cleanup. These allowances are estimates, not guarantees; the preview carries dated evidence and uncertainty. `--prepare-duration` can raise, never lower, preparation time.
 
-Reth source preparation targets Ubuntu 24.04 and includes `m4`, LLVM 22 development packages, and Polly for the default GMP/JIT features. The official LLVM repository uses a verified signing-key fingerprint and scoped `signed-by` key. Other source revisions can require different dependencies. Confirm the requested workload after compilation; build success establishes binary production.
+## Foundry
 
-## Custom recipes
+Modes: `tools` for pinned Forge/Cast contract work; `build` for a changed Foundry revision. Add `--solver z3` to tools for bounded symbolic properties. A symbolic `pass` is bounded by reported assumptions/model; accept a violation only with replay-confirmed counterexample; timeout, unsupported behavior, all-revert paths, solver errors, and zero meaningful exploration are incomplete.
 
-Pass a JSON file to `--recipe`. Its fields are `name`, optional `description`, `prepare` argv arrays, `artifacts` absolute remote paths, optional `afterCheckout` argv arrays, and optional `readiness` argv arrays. `afterCheckout` requires a source reference.
+For fuzz/invariant work, preserve test names, seed, run/depth counts, reverts/discards, selector metrics, config, compiler, and logs. No failure found is not proof, and a campaign with no successful handler calls is vacuous. For forks, pin endpoint block/hash and execution model; RPC state is trusted input. Foundry's Ethereum simulation does not implement BSC consensus/native precompiles, and a Base fork does not validate sequencing, derivation, bridge finality, or consensus.
 
-Saved-plan bootstrap runs preparation, checkout, then after-checkout commands once. Readiness probes repeat every 15 seconds inside the bootstrap deadline; use bounded, read-only commands. The `output.log` artifact basename is reserved for bootstrap output. Recipes describe preparation and files; the backend owns payment and runtime settings. Use saved plans for this workflow; legacy direct open supports synchronous preparation and a creation-only cap.
-
-## Readiness
-
-Ask for the scope the experiment needs:
+Build a changed revision with a public GitHub repository and exact commit:
 
 ```sh
-fission check NAME --scope tools --duration 1m
-fission check NAME --scope build --duration 1m
-fission check NAME --scope node --duration 1m --max-head-age 120
+fission run forge-change --harness foundry --mode build --repo https://github.com/OWNER/REPO \
+  --ref FULL_40_CHARACTER_SHA --patch ./change.patch --budget AMOUNT \
+  --duration 2h --work-duration 10m --region ams -- /workspace/cargo test --locked -p PACKAGE TEST
 ```
 
-`tools` observes installed executables. Source recipes offer `build`, which checks a clean checkout, build identity, and executable hashes. Development-chain recipes offer `node`, which verifies the local chain identity. Synced Reth's `node` scope also requires a completed compatible snapshot import, the import's free-disk allowance, healthy Reth/Lighthouse processes, connected peers, verified canonical execution payloads, zero consensus sync distance, and a head within the explicitly chosen age. `--max-head-age` applies to synced Reth only; choose it for the task.
+Generate the patch with `git diff --binary HEAD`, including lockfile changes (new files must be tracked or intent-to-add). The patch must be nonempty and is applied once before `/workspace/build`. Readiness checks the exact working-tree hash and compiled binaries, including a patched tree; reusable caches still require clean source. The workload runs in `/workspace/source` by default. Build mode preserves build provenance; it does not establish runtime correctness.
 
-Results contain `schemaVersion`, `scope`, `ready`, `observedAt`, and named observations. Exit status is zero only for a ready result. Each observation is saved locally and included in subsequent reports. Check immediately before the workload; readiness is a timestamped observation. Preparation and long sync waits remain separate bounded jobs. A check allows at most two minutes, keeping its guest deadline inside the three-minute SSH transport bound.
+Submodule worktrees must stay clean: provenance records their commits, not uncommitted dependency files. A parent-repository patch cannot carry those files. Commit dependency changes and pin their gitlinks rather than silently testing an unidentified dependency tree.
 
-Custom recipes can set `schemaVersion: 1` and add `checks`:
+## Reth
 
-```json
-{
-  "name": "custom-tool",
-  "scope": "tools",
-  "argv": ["/workspace/tool", "--version"],
-  "result": "exit"
-}
-```
+Modes: `dev` for the isolated pinned development chain, `build` for a changed Reth revision, and `synced` for Ethereum mainnet paired with Lighthouse. Only `--chain ethereum` is implemented; Base-Reth and Reth-BSC are unavailable.
 
-Place these objects in the recipe's `checks` array. Names must be unique. A check with `result: "exit"` requires exit code zero. With `result: "json"`, stdout must also be an object containing `"ready": true`; put measured and expected values alongside it. Probes should be read-only and bounded. The agent chooses the scope and interprets evidence; the backend retains payment, lease, and lifecycle ownership.
+For dev, record client version, genesis hash, chain ID, transactions/receipts, nonces and before/after state. Both bundled dev chains use chain ID 1337, so chain ID alone is insufficient. Reth dev mines on transactions; an idle head need not advance. Compilation proves neither sync nor consensus.
 
-## Reuse compiled artifacts
+Synced mode requires the canonical manifest and full planner JSON, a separately verified recent checkpoint root/epoch and HTTPS URL, explicit head-age bound, and extra disk allowance. Read [reth.md](reth.md); the managed run performs import, startup, readiness and cleanup.
 
-After a successful source build, save its binaries and provenance locally:
+## Tempo
 
-```sh
-fission cache save NAME --max-bytes 1000000000
-fission cache list
-fission cache restore NEXT_MACHINE CACHE_ID --max-bytes 1000000000
-fission check NEXT_MACHINE --scope build --duration 1m
-```
+Modes: `dev` for an isolated Tempo node, `tools` for Foundry's Tempo contract model, and `build` for a changed Tempo revision. Tools mode is simulation, not a Tempo node or transaction-envelope/consensus test.
 
-The byte limit bounds both the archive and uncompressed files; set it for the expected artifacts. The cache lives under `FISSION_HOME/.cache/builds`, survives rental cleanup, and has no recurring provider storage fee. A save needs local disk for the archive; restore needs guest disk for the archive and staged files. Only the selected executables and `build.json` enter the bundle.
+For dev transactions, inspect TIP-20 balances and the receipt's actual fee token/payer; `eth_getBalance` in the pinned development client is a compatibility placeholder. Require the intended raw/receipt transaction type, inclusion, nonce lane, state deltas, and fee-transfer evidence. An estimation error is not an included revert. Keep development keys isolated and out of persisted argv. A development chainspec may expose behavior absent from public networks.
 
-Prepare the same source recipe and revision on the next rental first. Restore verifies source commit and lockfile, submodules, compiler, native packages, CPU features, operating system, build flags, harness digest, and binary hashes. It preserves an existing build record and records the cache's origin when successful. Compatibility is deliberately conservative. A cache reuses a completed build for that exact environment; changes to the source require a new build.
+For contract-model tests, pin `network = "tempo"` and the intended `tempo:...` hardfork in `foundry.toml`, inspect resolved config, and include negative controls: successful empty returndata can be an empty account, not implemented behavior.
 
-## Portable experiments
+## Linux
 
-```sh
-fission report NAME JOB --log output.log --measurements measurements.json
-fission plan NEXT --from fission/NAME/TIMESTAMP-JOB/experiment.json \
-  --budget 1 --cheapest --region ams --duration 1h
-# Open the returned plan, prepare its environment and required inputs, then:
-fission run NEXT run0 --from fission/NAME/TIMESTAMP-JOB/experiment.json --duration 10m
-```
+Use `--harness linux` only for ordinary Linux x86_64 shell/Python work outside the three ecosystems. It provides tools readiness, not a blockchain node. Request a shell explicitly in argv when shell syntax is needed.
 
-A report contains the source pin, embedded recipe, harness hashes, commands and working directory, quoted and observed resources, timestamped readiness, measurements, supplied logs, receipts, and cleanup status. `experiment.json` hashes the attached report files and lets another agent create a fresh plan using the original requirements. Reruns require a new budget and explicit launch. The record does not authorize payment. Restore or upload workload inputs before launch; dataset paths in a command identify preparation requirements.
+## Inputs and outputs
 
-Measurements are an array of `{ "name": "elapsed", "value": 12.4, "unit": "s", "context": "describe the measured workload" }`. They are supplied observations, separate from recorded process timing. Save a report after cleanup to include its final confirmation. Older reports whose exact recipe cannot be recovered remain readable; portable records require a verified recipe and an explicit workload job.
+`--input LOCAL[=/workspace/PATH]` uploads one regular file and is repeatable; directories are never implicit. The input is fingerprinted at preview and must not change before upload. `--artifact /workspace/FILE` collects a regular file and is repeatable; databases are not artifacts. `--cwd` must be an absolute guest directory. Keep secrets out of all persisted material.
 
-The lifecycle separation follows [Centaur's harness interface](https://github.com/paradigmxyz/centaur/blob/main/crates/harness-server/src/traits.rs) and the task-specific environment approach in [LangChain's harness guide](https://www.langchain.com/blog/how-to-build-a-custom-agent-harness). Fission keeps the coding agent outside the guest and uses a small recipe contract for preparation, observations, execution, and artifacts.
-
-## Your own storage
-
-Choose an existing directory on the local disk, an attached drive, or storage you mount yourself. Check capacity first:
-
-```sh
-fission storage --storage-dir /Volumes/Data/fission --max-bytes 1200000000000
-```
-
-Pass `--storage-dir` to cache and dataset collection commands, or set `FISSION_STORAGE_DIR` for subsequent commands and the TUI. The TUI's **Storage** button (`o`) shows the selected path and available space. The default is `FISSION_HOME/.cache`. Choosing a different directory moves no existing files and opens no paid storage account. Fission charges no storage fee; a user-mounted service retains its own billing.
-
-For a completed Reth full import, preserve the execution database under your custody:
-
-```sh
-fission dataset inspect NAME --max-bytes 1200000000000 --storage-dir /Volumes/Data/fission
-fission exec NAME -- /workspace/ethereum stop
-fission dataset save NAME save0 --duration 2h --max-bytes 1200000000000 --storage-dir /Volumes/Data/fission
-# Observe save0 to completion, then collect its chunks:
-fission dataset collect NAME save0 --max-bytes 1200000000000 --storage-dir /Volumes/Data/fission
-# On another prepared reth-synced VM:
-fission dataset restore NEXT restore0 --from /Volumes/Data/fission/datasets/ID/manifest.json --duration 2h --max-bytes 1200000000000
-```
-
-Choose limits and durations from the inspection and remaining lease. Saving holds the Reth controller's mutation lock and requires its node processes to be stopped. It stages an uncompressed archive on the guest, so both guest staging space and local storage must accommodate it. Collection uses verified 64-MiB chunks and reuses completed local chunks when resumed. Restore verifies the saved manifest digest, pinned writer, chain, format, chunk hashes, and available guest space before unpacking into a fresh data directory. Preserve unresolved or partial operations for inspection.
-
-The saved dataset contains execution data and import metadata. Start Lighthouse again with a freshly verified checkpoint, then check node readiness before the next experiment. Transfer time, catch-up time, and the provider's transfer allowance still matter. Local storage is an explicit alternative to recurring provider storage; choose paid storage separately if its economics suit the workload.
+Retained build caches and Reth datasets are optional advanced recovery operations. Inspect compatibility, local capacity, transfer time, remaining lease, and stopped writers before `fission advanced cache ...` or `fission advanced dataset ...`. A same-machine cache result does not establish cross-rental compatibility.

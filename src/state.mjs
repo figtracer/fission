@@ -57,11 +57,31 @@ export async function list() {
   return states;
 }
 
-export const locked = (name, action) => fileLocked(join(directory(name), "operation.lock"), action);
+export const locked = (name, action, waitMs = 0) => fileLocked(join(directory(name), "operation.lock"), action, waitMs);
+
+export function processAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true; // Unknown ownership is not an abandoned lock.
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code !== "ESRCH"; }
+}
+
+// Explicit resume can reclaim dead owners. Serialize reapers and re-read after
+// acquiring that claim: two resumers must not unlink a newly acquired lock.
+export async function recoverLock(path) {
+  const owner = await readJSON(path);
+  if (!owner || processAlive(owner.pid)) return;
+  let claim;
+  try { claim = await open(`${path}.recovery`, "wx", 0o600); }
+  catch (error) { if (error.code === "EEXIST") return; throw error; }
+  try {
+    const current = await readJSON(path);
+    if (current && !processAlive(current.pid)) await unlink(path);
+  } finally { await claim.close(); await unlink(`${path}.recovery`); }
+}
 
 export class OperationLocked extends Error {
   constructor(path) {
-    super(`Operation lock exists: ${path}. Check its PID; after that process exits, remove only the lock and run reconcile. Keep all other state.`);
+    super(`Operation lock exists: ${path}. Leave a live owner intact. Managed tasks can use status NAME --resume after the owner exits; preserve all state.`);
     this.path = path;
   }
 }

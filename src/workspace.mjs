@@ -4,7 +4,7 @@ import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
-import { quote, request, recoverCreate, execute, money, validRemoteId } from "./provider.mjs";
+import { request, recoverCreate, execute, validRemoteId } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
@@ -89,23 +89,6 @@ export function duration(text) {
   return seconds;
 }
 
-export async function plan(name, options) {
-  if (options.recipe === "reth-synced") throw new Error("The synced-node recipe requires capability matching through a saved plan.");
-  if (options.recipe === "foundry-symbolic") throw new Error("The symbolic recipe requires a saved Linux x86_64 VM plan.");
-  directory(name);
-  if (await readJSON(join(directory(name), "state.json")))
-    throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");
-  const definition = await recipe(options.recipe);
-  if (definition.afterCheckout?.length) throw new Error("Source recipes require a saved plan with --repo and --ref.");
-  const timeout = duration(options.duration);
-  const maximum = options["max-spend"];
-  if (money(maximum) <= 0n) throw new Error("Set a positive --max-spend for creation.");
-  const body = { timeout };
-  const offer = await quote("create", body);
-  if (money(offer.amount) > money(maximum)) throw new Error(`Quote ${offer.amount} exceeds --max-spend ${maximum}.`);
-  return { name, project: basename(process.cwd()), provider: "modal-tempo", kind: "linux-sandbox", durationSeconds: timeout, creationQuote: offer.amount, creationCap: maximum, operationCap, recipe: definition, body };
-}
-
 export async function start(name, prepared) {
   prepared = { ...prepared, provider: providerId(prepared.provider) };
   return locked(name, async () => {
@@ -113,6 +96,7 @@ export async function start(name, prepared) {
     if (previous && previous.phase !== "not_submitted")
       throw new Error("That name already has saved state. Reconcile it or choose a different name for a new task.");
     const state = { ...prepared, phase: "provisioning_unknown", createRequest: randomUUID(), requestedAt: new Date().toISOString(), remoteId: null };
+    if (state.task) state.task.deadline = Date.parse(state.requestedAt) + state.durationSeconds * 1000;
     await save(state);
     let response;
     try { response = await request(state, "create", state.body, state.creationCap, state.createRequest); }
@@ -132,24 +116,8 @@ export async function start(name, prepared) {
     state.deadlineEstimate = new Date(Date.parse(state.requestedAt) + state.durationSeconds * 1000).toISOString();
     state.phase = "preparing";
     await save(state);
-    if (state.asyncPreparation) return prepareState(state);
-
-    try {
-      for (const command of state.recipe.prepare) {
-        const result = await execute(state, command, operationCap);
-        if (result.returncode !== 0) throw new Error(`Preparation exited ${result.returncode}: ${result.stderr.slice(-1000)}`);
-      }
-      state.phase = "ready";
-      state.readyAt = new Date().toISOString();
-      await save(state);
-    } catch (error) {
-      state.preparationError = error.message;
-      state.phase = "prepare_failed";
-      await save(state);
-      try { await terminate(state); } catch { /* State retains unresolved cleanup. */ }
-      throw new Error(`Preparation failed: ${error.message}. Cleanup state: ${state.phase}.`);
-    }
-    return state;
+    // Managed tasks return after purchase; the detached owner performs preparation.
+    return state.task ? state : prepareState(state);
   });
 }
 
@@ -161,19 +129,34 @@ async function prepareState(state) {
     const compute = await import("./compute.mjs");
     if (state.lease) {
       if (!await compute.prepareLease(state)) return state;
-    } else await compute.prepareAccess(state);
+    } else {
+      await compute.prepareAccess(state);
+      await compute.verifyGuest(state);
+    }
   }
   const { launch } = await import("./jobs.mjs");
   const commands = [...state.recipe.prepare];
   if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
   if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
   commands.push(...(state.recipe.afterCheckout || []));
+  if (state.task) commands.unshift(["python3", "-c", `import datetime,json,pathlib,subprocess,sys,time
+deadline=float(sys.argv[1])
+assert deadline-time.time()>=60, 'Task deadline too close to arm guest shutdown'
+when=datetime.datetime.fromtimestamp(deadline,datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+subprocess.run(['systemd-run','--unit','fission-deadline','--description','Fission task deadline shutdown','--on-calendar',when,'--timer-property','AccuracySec=1s','systemctl','poweroff'],check=True)
+raw=subprocess.check_output(['systemctl','show','fission-deadline.timer','-p','ActiveState','-p','SubState','-p','NextElapseUSecRealtime'],text=True)
+props=dict(line.split('=',1) for line in raw.splitlines() if '=' in line)
+assert props.get('ActiveState')=='active' and props.get('SubState')=='waiting', 'Guest shutdown timer not armed: '+raw
+record={'deadline':deadline,'calendar':when,'timer':props,'observedAt':time.time()}
+pathlib.Path('/workspace/.fission/deadline.json').write_text(json.dumps(record))
+print(json.dumps(record))`, String(state.task.deadline / 1000)]);
   // The job identity is persisted before launch. An ambiguous result is observed,
   // never automatically replayed or mistaken for failed preparation.
   state.bootstrapJob = "bootstrap";
-  state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log"])] };
+  state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log",
+    ...(state.task ? ["/workspace/.fission/deadline.json"] : [])])] };
   await save(state);
-  await launch(state, "bootstrap", commands, state.durationSeconds, state.recipe.readiness || []);
+  await launch(state, "bootstrap", commands, state.task ? Math.min(state.durationSeconds, state.task.timing.preparationSeconds) : state.durationSeconds, state.recipe.readiness || []);
   return state;
 }
 
@@ -300,7 +283,7 @@ async function fingerprint(file) {
   return { size: info.size, sha256: hash.digest("hex") };
 }
 
-export async function upload(state, local, remote) {
+export async function upload(state, local, remote, options = {}) {
   remotePath(remote);
   if (providerId(state.provider) === "compute-mpp") {
     const source = await open(resolve(local), constants.O_RDONLY | constants.O_NONBLOCK);
@@ -308,7 +291,7 @@ export async function upload(state, local, remote) {
     try {
       const expected = await fingerprint(source);
       const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
-      const result = await execute(state, ["python3", "-c", script, "receive", staging, remote, String(expected.size), expected.sha256], operationCap, undefined, { inputFd: source.fd });
+      const result = await execute(state, ["python3", "-c", script, "receive", staging, remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, inputFd: source.fd });
       if (result.returncode) throw new Error("Upload verification or publication failed; destination must not exist.");
       const received = JSON.parse(result.stdout);
       if (received.size !== expected.size || received.sha256 !== expected.sha256) throw new Error("Unrecognized upload acknowledgement.");
@@ -333,7 +316,7 @@ export async function upload(state, local, remote) {
   return { remote, bytes: bytes.length, sha256: digest };
 }
 
-export async function download(state, remote, local) {
+export async function download(state, remote, local, options = {}) {
   remotePath(remote);
   const destination = resolve(local);
   await mkdir(resolve(destination, ".."), { recursive: true });
@@ -344,11 +327,11 @@ export async function download(state, remote, local) {
   try {
     if (providerId(state.provider) === "compute-mpp") {
       const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
-      const metadata = await execute(state, ["python3", "-c", script, "metadata", remote], operationCap);
+      const metadata = await execute(state, ["python3", "-c", script, "metadata", remote], operationCap, undefined, options);
       if (metadata.returncode) throw new Error("Remote file could not be read.");
       expected = JSON.parse(metadata.stdout);
       if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error("Invalid file manifest.");
-      const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { outputFd: target.fd });
+      const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, outputFd: target.fd });
       if (result.returncode) throw new Error("Export interrupted or file changed.");
       const actual = await fingerprint(target);
       if (actual.size !== expected.size || actual.sha256 !== expected.sha256) throw new Error("Export digest mismatch.");
@@ -382,8 +365,8 @@ export async function close(name, options) {
     if (terminal(state)) return state;
     if (!state.remoteId) throw new Error("Run reconcile before closing an unresolved creation.");
     if (state.phase === "termination_unknown" && await hasTerminationReservation(state)) {
-      await refreshState(state);
-      if (terminal(state)) return state;
+      // A lost DELETE acknowledgement never authorizes a duplicate mutation.
+      return refreshState(state);
     }
     if (!options["discard-output"] && state.recipe.artifacts.length && !options.output)
       throw new Error("Choose --output DIR to save declared files, or --discard-output to delete without saving.");

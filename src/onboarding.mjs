@@ -25,7 +25,7 @@ export const guideTopics = ["rental", "harnesses", "reth", "workloads"];
 export async function guide(name) {
   const [topic, section, extra] = name?.split("/") || [];
   if (name !== undefined && (!guideTopics.includes(topic) || extra !== undefined || section === ""))
-    throw new Error("Use fission guide to choose a topic or topic/section.");
+    throw new Error("Use fission help guides to choose a topic or topic/section.");
   const documents = await Promise.all((topic ? [topic] : guideTopics).map(async (key) => {
     const text = await readFile(new URL(`../docs/${key}.md`, import.meta.url), "utf8");
     if (topic && !section) return text;
@@ -36,8 +36,8 @@ export async function guide(name) {
     }));
     if (!topic) return `${key} — ${text.split("\n", 1)[0].replace(/^# /, "")}\n${sections.map(({ id }) => `  ${key}/${id}`).join("\n")}`;
     const selected = sections.find(({ id }) => id === section);
-    if (!selected) throw new Error(`Unknown guide section: ${name}. Use fission guide for the index.`);
+    if (!selected) throw new Error(`Unknown guide section: ${name}. Use fission help guides for the index.`);
     return `${text.split("\n", 1)[0]}\n\n${selected.text}`;
   }));
-  return topic ? documents[0] : `Read a topic or complete section with fission guide TOPIC[/SECTION].\n\n${documents.join("\n\n")}`;
+  return topic ? documents[0] : `Read a topic or complete section with fission help TOPIC[/SECTION].\n\n${documents.join("\n\n")}`;
 }

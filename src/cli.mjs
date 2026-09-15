@@ -2,12 +2,13 @@
 import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { list, load, locked } from "./state.mjs";
-import { execute, money, providerWarning } from "./provider.mjs";
-import { plan, start, refresh, reconcile, active, upload, download, close, operationCap, prepare, repair } from "./workspace.mjs";
+import { execute, providerWarning } from "./provider.mjs";
+import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair } from "./workspace.mjs";
 
 import { budget } from "./budget.mjs";
 import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
-import { workloads } from "./workloads.mjs";
+import { harnesses } from "./harnesses.mjs";
+import { runTask, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 import { help } from "./help.mjs";
@@ -62,6 +63,12 @@ async function main() {
   const tail = separator < 0 ? [] : raw.slice(separator + 1);
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" }, tmux: { type: "boolean" },
+    harness: { type: "string" }, mode: { type: "string" }, chain: { type: "string" }, solver: { type: "string" },
+    patch: { type: "string" },
+    "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
+    input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
+    manifest: { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
+    resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
@@ -73,32 +80,43 @@ async function main() {
     from: { type: "string" }, measurements: { type: "string" },
     log: { type: "string" }, notes: { type: "string" }, recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
   } });
+  const advanced = positionals[0] === "advanced";
+  if (advanced) positionals.shift();
   if (values.help) {
     const [command] = positionals;
     const topic = command === "help" ? positionals.slice(1)
       : positionals.slice(0, ["cache", "dataset", "skill"].includes(command) ? 2 : 1);
-    console.log(await help(topic)); return;
+    console.log(await help(advanced ? ["advanced", ...topic] : topic)); return;
   }
+  if (advanced && !positionals.length) { console.log(await help(["advanced"])); return; }
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
-  if (command === "ui" && values.json) throw new Error("Use fission list --json for machine data.");
+  if (command === "ui" && values.json) throw new Error("Use fission status --json for task data.");
+  if (!advanced && !["ui", "run", "status", "stop", "help", "budget"].includes(command))
+    throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
     skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
-    open: values.plan ? ["plan", "approve"] : ["recipe", "duration", "max-spend", "approve"],
-    prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"], watch: ["refresh", "max-spend"],
+    open: ["plan", "approve"], stop: [], supervise: [],
+    prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
     dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], job: ["refresh"], wait: ["duration", "max-spend"],
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
+  if (!advanced) {
+    allowed.run = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "cpu", "memory", "disk", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "approve", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
+    allowed.status = ["refresh", "resume", "wait"];
+  }
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
-  if (command === "watch" && values["max-spend"] !== undefined && !values.refresh)
-    throw new Error("Watch spending cap requires --refresh.");
   const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  arity.stop = 2; arity.supervise = 2;
+  if (!advanced) { arity.run = 2; arity.status = name ? 2 : 1; }
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission help ${command}.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
+    case "supervise": await supervise(name); break;
+    case "stop": emit(await stopTask(name)); break;
     case "help": console.log(await help(positionals.slice(1))); break;
     case "skill":
       if (name !== "install") throw new Error("Use fission skill install.");
@@ -118,9 +136,8 @@ async function main() {
       break;
     }
     case "capabilities": {
-      const selected = name ? workloads.filter(({ ecosystem }) => ecosystem === name) : workloads;
-      if (!selected.length) throw new Error("Unknown ecosystem. Use foundry, reth, tempo, base, or bsc.");
-      emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" }, workloads: selected });
+      if (name && !Object.hasOwn(harnesses, name)) throw new Error("Unknown harness.");
+      emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" }, harnesses: name ? { [name]: harnesses[name] } : harnesses });
       break;
     }
     case "budget":
@@ -154,6 +171,11 @@ async function main() {
     }
     case "jobs": emit((await listJobs(name)).map(jobSummary)); break;
     case "run": {
+      if (!advanced) {
+        const result = await runTask(name, values, tail); emit(result);
+        if (result.status === "unavailable") process.exitCode = 2;
+        break;
+      }
       if (values.from) {
         if (tail.length) throw new Error("Use --from or a command, not both.");
         const record = await (await import("./experiments.mjs")).readExperiment(values.from);
@@ -179,13 +201,8 @@ async function main() {
         ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
       break;
     case "open": {
-      if (values.plan) {
-        if (!values.approve) throw new Error("Saved plans require --approve to open.");
-        emit(summary(await openPlan(name, values.plan))); break;
-      }
-      const prepared = await plan(name, values);
-      if (!values.approve) { emit({ ...prepared, note: "Preview only. Preparation argv executes remotely. Add --approve to purchase." }); break; }
-      emit(summary(await start(name, prepared)));
+      if (!values.plan || !values.approve) throw new Error("Use a saved --plan with --approve; direct-open preparation was consolidated into saved plans.");
+      emit(summary(await openPlan(name, values.plan)));
       break;
     }
     case "list": {
@@ -194,6 +211,22 @@ async function main() {
       break;
     }
     case "status": {
+      if (!advanced) {
+        if (!name && (values.resume || values.refresh || values.wait)) throw new Error("Select one task for --resume, --refresh or --wait.");
+        if (values.resume) await resumeTask(name);
+        if (values.refresh) await refresh(name);
+        const until = Date.now() + (values.wait ? duration(values.wait) * 1000 : 0);
+        let result;
+        do {
+          result = await taskStatus(name);
+          if (!values.wait || result.phase === "done") break;
+          await delay(Math.min(1000, Math.max(0, until - Date.now())));
+        } while (Date.now() < until);
+        emit(result);
+        if (values.wait && result.phase !== "done") process.exitCode = 2;
+        else if (values.wait && result.outcome !== "succeeded") process.exitCode = 1;
+        break;
+      }
       const state = values.refresh ? await refresh(name) : await load(name);
       values.json ? emit(summary(state)) : console.log(table([state]));
       break;
@@ -219,37 +252,6 @@ async function main() {
     case "close":
       if (values.output && values["discard-output"]) throw new Error("Choose --output or --discard-output, not both.");
       emit(summary(await close(name, values))); break;
-    case "watch": {
-      let budget = values.refresh ? money(values["max-spend"]) : 0n;
-      const controller = new AbortController();
-      const stop = () => controller.abort();
-      process.on("SIGINT", stop);
-      process.on("SIGTERM", stop);
-      let nextRefresh = 0, warning = "";
-      try {
-        do {
-          let states = await list();
-          if (values.refresh && Date.now() >= nextRefresh) {
-            for (const state of states.filter((s) => s.remoteId && s.phase !== "terminated")) {
-              if (budget < money(operationCap)) { warning = "Refresh budget exhausted; showing cached observations."; break; }
-              // Reserve the full cap even if the response is lost or the call fails.
-              budget -= money(operationCap);
-              try { await refresh(state.name); } catch (error) { warning = error.message; }
-            }
-            nextRefresh = Date.now() + 30000;
-            states = await list();
-          }
-          if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[H");
-          console.log(table(states));
-          console.log("\nCtrl-C exits this view. Workspaces keep their provider expiry.");
-          if (warning) console.log(safeText(warning));
-          if (!process.stdout.isTTY) break;
-          await delay(1000, undefined, { signal: controller.signal });
-        } while (!controller.signal.aborted);
-      } catch (error) { if (error.name !== "AbortError") throw error; }
-      finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); }
-      break;
-    }
     default: throw new Error(`Unknown command ${command}. Run fission --help.`);
   }
 }
