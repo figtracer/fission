@@ -10,6 +10,10 @@ Usage: fission run NAME --harness foundry|reth|tempo|linux --budget AMOUNT
 Fission selects compatible quotes, reserves the task budget, prepares and checks
 the environment, runs the argv, collects evidence, then destroys and confirms.
 The local supervisor survives terminal/agent disconnect. No replacement purchase.
+Before payment, failed quotes/capacity checks may select a retained alternative,
+cheapest compatible first within the creation cap, with no percentage premium rule.
+Resource floors, region, duration and lifecycle headroom stay unchanged. Preview
+lists alternatives and failures. Current VM offers still share a single gateway.
 
 Options:
   --mode MODE             See harness help; test never builds release binaries first
@@ -117,7 +121,8 @@ Usage: fission                     Open the Rust task dashboard
 
 Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
 Read help run first. No embedded agent runs in the VM.
-MPP/Tempo only; --approve uses existing budget and duration authorization.
+MPP/Tempo purchase path; x402 gateways not yet integrated. See help rental.
+--approve uses existing budget and duration authorization.
 Durations: s/m/h/d, at least 60s; provider availability and authorization bound leases.
 Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
@@ -129,7 +134,7 @@ FISSION_HOME selects the existing durable state and ledger.`;
   if (key === "status") return `fission status — ${status}`;
   if (key === "budget") return `fission budget — ${budget}`;
   if (key === "stop") return "fission stop — Cancel the managed task and collect available evidence before teardown.\n\nUsage: fission stop NAME\n\nReturns recorded cancellation intent; use status NAME --wait DURATION to confirm\ncleanup. Repeating stop observes the same task, not a second purchase or DELETE.";
-  if (key === "ui") return "fission — Rust task dashboard.\n\nUsage: fission\n\nRequires an interactive terminal. q exits the dashboard, not the task.";
+  if (key === "ui") return "fission — Rust task dashboard.\n\nUsage: fission\n\nRequires an interactive terminal. Press q twice consecutively to exit the dashboard, not the task. Another key or actionable mouse event cancels the first q.\n\nAvailable: b cycles within-budget VM offers, all VM prices, and read-only Gateways. Only usable gateways appear; details show the compute operator, pricing units and supported scope. j/k scrolls details. VM offer details request fresh quotes without payment. See help rental for unavailable candidates.";
   if (key === "advanced") return `Secondary recovery interface; not the normal task workflow.\n\nUsage: fission advanced COMMAND ...\n\n${Object.keys(advanced).filter((key) => !key.includes(" ")).join(", ")}\n\nUse fission help advanced COMMAND [SUBCOMMAND] for syntax. Saved old plans/jobs\nremain readable. Direct-open and watch were removed; no history is migrated.\nNever manually mutate a managed task while its supervisor is active.`;
   if (parts[0] === "advanced" && Object.hasOwn(advanced, parts.slice(1).join(" "))) {
     const command = parts.slice(1).join(" ");

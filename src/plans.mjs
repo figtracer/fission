@@ -8,22 +8,61 @@ import { catalog, machineCapabilities } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
 export const providers = [{
-  id: "modal-tempo", available: true,
+  id: "modal-tempo", available: true, gateway: "Tempo", operator: "Modal",
+  price: "Dynamic creation + $0.0001 per lifecycle call", payment: "MPP tempo.charge",
   capabilities: { os: "linux", kind: "sandbox", architecture: null, cpu: null, memoryGiB: null, diskGiB: null, p2p: false, customImage: false, expiry: true },
   evidence: "https://modal.mpp.tempo.xyz",
   limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
 }, {
-  id: "compute-mpp", available: true,
+  id: "compute-mpp", available: true, gateway: "x402layer", operator: "Vultr",
+  price: "Live per-plan VM prices; quote before purchase",
   limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Shorter target leases use a prepaid starter upgrade with capacity and time gates. Catalog capacity and P2P require guest verification; node readiness is a separate workload. Early deletion does not imply a refund.",
   payment: "MPP tempo.charge",
 }, {
-  id: "smol-orthogonal", available: false,
+  id: "smol-orthogonal", available: false, gateway: "Orthogonal", operator: "Smol",
   reason: "Lifecycle API returned expired_key on 2026-09-13. No purchase until authenticated lifecycle operations work.",
   evidence: "https://www.orthogonal.com/blog/smolmachines-microvms-for-ai-agents",
 }, {
-  id: "agentvm", available: false,
+  id: "agentvm", available: false, gateway: "AgentVM", operator: "Hetzner",
   reason: "Published MPP profile has unselectable capacity (up to 160 GB), Linux only, and no verified capability-authenticated immediate teardown.",
   evidence: "https://mpp.agentvm.sh/compute/sessions",
+}, {
+  id: "vps-phoneagent", available: false, gateway: "Mercator / PhoneAgent", operator: "Unspecified",
+  price: "From $12.99 / month (published Sep 15, 2026)", payment: "x402 Base USDC; listed by Mercator",
+  reason: "September 15, 2026: Mercator rent quotes failed invalid_challenge (HTTP 402, non-retryable). Hourly sandboxes are documented unavailable. No documented immediate destroy.",
+  evidence: "https://vps.phoneagent.xyz/llms.txt",
+}, {
+  id: "agentmetal", available: false, gateway: "AgentMetal", operator: "Unspecified",
+  price: "From $1.20 / day (catalog Sep 15, 2026)", payment: "x402 Base USDC",
+  reason: "September 15, 2026: early destroy requires an account bearer key; no configured signing/authentication path or verified x86 lifecycle. Not found in Mercator discovery.",
+  evidence: "https://agentmetal.dev/auth.md",
+}, {
+  id: "palmyr", available: false, gateway: "Palmyr", operator: "Hetzner", payment: "x402 Base USDC or Solana USDC",
+  reason: "September 15, 2026: monthly Hetzner x86 VPS plans exist, but Mercator lists only SSH-key registration, not provision/status/destroy. Lifecycle requires the original payer identity; no configured direct signing path.",
+  evidence: "https://palmyr.ai/compute/plans",
+}, {
+  id: "vaaya", available: false, gateway: "Mercator / Vaaya", operator: "Modal",
+  payment: "Tempo to Mercator; x402 Base USDC downstream",
+  price: "$0.05 / 300s creation + $0.01 / exec (quote Sep 15, 2026)",
+  reason: "Create and exec quotes succeed. Mercator rejects status and terminate as not cataloged. Sandbox only; resource guarantees and complete lifecycle unverified. No purchase enabled.",
+  evidence: "https://vaaya.ai/tools/modal/sandbox-create",
+}, {
+  id: "blockrun", available: false, gateway: "Mercator / BlockRun", operator: "Modal",
+  payment: "Tempo to Mercator; x402 Base USDC downstream",
+  price: "$0.011 / 300s creation + $0.002 / lifecycle call (402 Sep 15, 2026)",
+  reason: "Direct payment challenges respond promptly, but Mercator rejects create with invalid_challenge and exec/status/terminate as not cataloged. Sandbox, not an SSH VM; no purchase enabled.",
+  evidence: "https://blockrun.ai/services/modal",
+}, {
+  id: "openvps", available: false, gateway: "OpenVPS", operator: "Self-hosted Firecracker",
+  payment: "MPP Tempo or x402 (published, not live verified)",
+  reason: "Independent Linux VM implementation with SSH/status/delete. Published deployment openvps.sh refused HTTPS connections on Sep 15, 2026. Live terms, capacity and lifecycle unverified.",
+  evidence: "https://github.com/kartojal/openvps",
+}, {
+  id: "payweave-sandbox", available: false, gateway: "PayWeave", operator: "Unspecified",
+  payment: "MPP Tempo USDC.e or x402",
+  price: "$0.01 / execution, at most 60s (published Sep 15, 2026)",
+  reason: "Single-use command execution only. No persistent machine, SSH, resource guarantees or separate status/terminate routes. Not compatible with managed harness preparation and artifact transfers.",
+  evidence: "https://sandbox.payweave.services/skill.md",
 }].map((provider) => ({ ...provider, warning: providerWarning(provider.id) }));
 
 // Planning floors, not performance guarantees; stricter issue-specific requirements
@@ -131,13 +170,13 @@ function quotedLease(lease, quotedAmount) {
     note: "Credit converts to a shorter target lease. Migration consumes time; actual hardware and remaining lease are checked before bootstrap." };
 }
 
-export async function machineOffers(options) {
+export async function machineOffers(options, machines) {
   const { profile, requirements } = requirementsFor({ kind: "vm", ...options });
   const cap = await vmCeiling(profile, options["max-spend"]);
   if (cap === null || money(cap) <= 0n) throw new Error("Set a VM ceiling with budget --vm-max-spend AMOUNT --approve, or pass machines --max-spend AMOUNT for discovery.");
   if (!/^[a-z0-9-]+$/.test(options.region || "")) throw new Error("Select --region, such as ams. Compare offers in the same region.");
   const seconds = duration(options.duration || "24h");
-  const machines = await catalog();
+  machines ??= await catalog();
   const candidates = [], seen = new Set();
   let compatible = 0, omitted = 0, unsupportedLease = 0;
   for (const machine of machines) {
@@ -155,14 +194,15 @@ export async function machineOffers(options) {
   }
   candidates.sort((a, b) => a.estimate < b.estimate ? -1 : a.estimate > b.estimate ? 1 : a.machine.id.localeCompare(b.machine.id));
   const offers = [];
-  let quoteFailures = 0, changedBeyondCap = 0;
+  const quoteErrors = [];
+  let changedBeyondCap = 0;
   for (const { machine, capabilities, estimate, lease, prepaidHours } of candidates.slice(0, shortlistSize)) {
     let offer, quoted;
     try {
       offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: lease?.prepaidHours || prepaidHours, label: "fission-quote" }, "compute-mpp");
       quoted = quotedLease(lease, offer.amount);
     }
-    catch { quoteFailures++; continue; }
+    catch (error) { quoteErrors.push({ provider: "compute-mpp", machine: machine.id, reason: error.message }); continue; }
     if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
     offers.push({ provider: "compute-mpp", providerWarning: providerWarning("compute-mpp"), machine: machine.id, region: options.region, capabilities,
       creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
@@ -175,7 +215,8 @@ export async function machineOffers(options) {
     offers, average: prices.length ? { amount: amount((prices.reduce((a, b) => a + b, 0n) + BigInt(prices.length) - 1n) / BigInt(prices.length)),
       minimum: amount(prices[0]), maximum: amount(prices.at(-1)), sampleCount: prices.length, providerCount: 1,
       basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for the requested target duration. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
-    excluded: { overCeiling: compatible - unsupportedLease - candidates.length + changedBeyondCap, unsupportedLease, incompleteCatalog: omitted, quoteFailures },
+    quoteErrors,
+    excluded: { overCeiling: compatible - unsupportedLease - candidates.length + changedBeyondCap, unsupportedLease, incompleteCatalog: omitted, quoteFailures: quoteErrors.length },
     note: offers.length ? "Capacity and inventory are provider catalog claims; plan and open re-quote before payment. Leave allocation room for lifecycle operations." : "No verified quote within the ceiling. Requirements and budget were preserved." };
 }
 
@@ -203,7 +244,7 @@ export async function createPlan(name, options, task) {
     options["total-spend"] = options.budget;
     options["max-spend"] = amount(money(options.budget) - minimumHeadroom);
   }
-  let selection;
+  let selection, machines, alternatives = [];
   if (options.cheapest) {
     if (options.budget === undefined) throw new Error("Use --cheapest with a whole-workspace --budget.");
     if (options.machine || (options.provider && options.provider !== "compute-mpp") || (options.kind && options.kind !== "vm"))
@@ -211,20 +252,25 @@ export async function createPlan(name, options, task) {
     if (!options.duration) throw new Error("--cheapest requires an explicit --duration.");
     const cap = await vmCeiling(options.profile || "runtime");
     if (cap !== null && money(options.budget) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
-    const discovery = await machineOffers(options);
+    machines = await catalog();
+    const discovery = await machineOffers(options, machines);
     if (!discovery.offers.length) return discovery;
     const selected = discovery.offers[0];
     options.provider = selected.provider;
     options.machine = selected.machine;
     selection = { strategy: "cheapest", scope: discovery.average.basis, sampleCount: discovery.offers.length,
-      average: discovery.average.amount, selectedQuote: selected.creationQuote, quotedAt: selected.quotedAt };
+      average: discovery.average.amount, selectedQuote: selected.creationQuote, quotedAt: selected.quotedAt,
+      baseline: selected.creationQuote, providerCount: discovery.average.providerCount, quoteErrors: discovery.quoteErrors };
+    // Prefer the closest-priced compatible offers without inventing a second
+    // budget. Discovery already preserves the task cap and lifecycle headroom.
+    alternatives = discovery.offers.slice(1);
   }
   const provider = options.provider || "modal-tempo";
   const { profile, requirements } = requirementsFor({ ...(provider === "compute-mpp" ? { kind: "vm" } : {}), ...options });
   if (!["modal-tempo", "compute-mpp"].includes(provider)) throw new Error("Unknown provider.");
   let machine, capabilities, rental;
   if (provider === "compute-mpp") {
-    const machines = await catalog();
+    machines ??= await catalog();
     machine = machines.find((item) => item.id === options.machine && item.provider === "vultr");
     if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a Vultr --machine and --region from the live compute catalog.");
     capabilities = machineCapabilities(machine);
@@ -248,7 +294,7 @@ export async function createPlan(name, options, task) {
   if (machine) {
     const cap = await vmCeiling(profile);
     if (cap !== null && money(totalCap) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
-    if (rental.estimate > money(creationCap)) return { status: "unavailable", reason: "Catalog estimate exceeds the creation cap; no quote or payment submitted.", requirements, paymentSubmitted: false };
+    if (!selection && rental.estimate > money(creationCap)) return { status: "unavailable", reason: "Catalog estimate exceeds the creation cap; no quote or payment submitted.", requirements, paymentSubmitted: false };
   }
   let source;
   if (options.repo || options.ref) {
@@ -270,11 +316,32 @@ export async function createPlan(name, options, task) {
     body = { plan: rental.lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
       prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
   }
-  const offer = await quote("create", body, provider);
-  if (money(offer.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
-  if (selection && money(offer.amount) > money(selection.selectedQuote)) throw new Error("Quote increased after selection. No purchase submitted; request a fresh plan.");
-  if (options.budget !== undefined) creationCap = offer.amount;
-  const lease = quotedLease(rental?.lease, offer.amount);
+  const candidates = [{ machine, capabilities, body, lease: rental?.lease }, ...alternatives.map((item) => {
+    const target = machines.find((entry) => entry.id === item.machine && entry.provider === "vultr");
+    const rental = rentalFor(target, machines, timeout, options.region);
+    return { machine: target, capabilities: item.capabilities, lease: item.lease,
+      body: { ...body, plan: rental.lease?.starter.id || target.id, prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours } };
+  })];
+  let chosen, offer;
+  const skipped = [];
+  for (const candidate of candidates) {
+    try {
+      const current = await quote("create", candidate.body, provider);
+      if (money(current.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
+      candidate.lease = quotedLease(candidate.lease, current.amount);
+      chosen = candidate; offer = current; break;
+    } catch (error) {
+      if (!selection) throw error;
+      skipped.push({ machine: candidate.machine.id, reason: error.message });
+    }
+  }
+  if (!chosen) return { status: "unavailable", name, requirements, paymentSubmitted: false,
+    reason: "No quoted candidate within the task's creation cap. No purchase submitted.", selection: { ...selection, skipped } };
+  ({ machine, capabilities, body } = chosen);
+  const lease = chosen.lease;
+  if (selection) selection = { ...selection, selectedQuote: offer.amount, skipped,
+    alternates: candidates.filter((item) => item !== chosen) };
+  else if (options.budget !== undefined) creationCap = offer.amount;
   const value = { version: 1, status: "planned", id: randomUUID(), name, project: basename(process.cwd()), profile, requirements, provider, providerWarning: providerWarning(provider), kind: machine ? "linux-vm" : "linux-sandbox", capabilities: capabilities || providers[0], machine, lease, durationSeconds: timeout, creationQuote: offer.amount, creationCap, totalCap, source, recipe: definition, body, selection, createdAt: new Date().toISOString() };
   if (task) value.task = task;
   value.digest = digest(value);
@@ -290,25 +357,45 @@ export async function openPlan(name, id) {
   const { digest: expected, ...contents } = value;
   if (digest(contents) !== expected) throw new Error("Plan changed after creation. Generate a fresh plan.");
   value.provider = providerId(value.provider);
+  let machines;
   if (value.provider === "compute-mpp") {
     const cap = await vmCeiling(value.profile);
     if (cap !== null && money(value.totalCap) > money(cap)) throw new Error("Saved allocation exceeds the current VM ceiling. Generate a lower-budget plan.");
-    const machines = await catalog();
-    const current = machines.find((item) => item.id === value.machine.id && item.provider === "vultr");
-    if (!current || !current.locations.includes(value.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(value.capabilities))
-      throw new Error("Compute plan capacity changed. Generate a fresh plan.");
-    if (value.lease) {
-      const starter = machines.find((item) => item.id === value.body.plan && item.provider === "vultr");
-      if (!starter || !starter.locations.includes(value.body.region) || JSON.stringify(machineCapabilities(starter)) !== JSON.stringify(value.lease.starterCapabilities) ||
-          hourlyRate(starter) !== money(value.lease.starterHourlyRate) || hourlyRate(current) !== money(value.lease.targetHourlyRate))
-        throw new Error("Starter capacity or conversion rates changed. Generate a fresh plan.");
-    }
+    machines = await catalog();
     if ((await readFile(join(directory(name), "id_ed25519.pub"), "utf8")).trim() !== value.body.ssh_public_key)
       throw new Error("Workspace SSH public key changed after planning.");
   } else if (!match(value.requirements).some((item) => item.provider === value.provider && !item.unmet.length))
     throw new Error("Provider no longer satisfies the saved requirements.");
-  const offer = await quote("create", value.body, value.provider);
-  if (money(offer.amount) > money(value.creationCap)) throw new Error("Current quote exceeds the approved creation cap.");
-  quotedLease(value.lease, offer.amount);
-  return start(name, { ...value, creationQuote: offer.amount, asyncPreparation: true });
+  const candidates = [{ machine: value.machine, capabilities: value.capabilities, body: value.body, lease: value.lease }, ...(value.selection?.alternates || [])];
+  let chosen, offer;
+  const skipped = [];
+  for (const candidate of candidates) {
+    try {
+      if (machines) validateCandidate(machines, candidate);
+      const current = await quote("create", candidate.body, value.provider);
+      if (money(current.amount) > money(value.creationCap)) throw new Error("Current quote exceeds the approved creation cap.");
+      candidate.lease = quotedLease(candidate.lease, current.amount);
+      chosen = candidate; offer = current; break;
+    } catch (error) {
+      if (!value.selection?.alternates) throw error;
+      skipped.push({ machine: candidate.machine.id, reason: error.message });
+    }
+  }
+  if (!chosen) throw new Error(`No approved candidate validated before payment: ${skipped.map((item) => `${item.machine}: ${item.reason}`).join("; ")}. No purchase submitted.`);
+  // This is deliberately outside the fallback loop. Once a creation intent
+  // exists, observe its outcome; never buy another machine after an error.
+  return start(name, { ...value, ...chosen, creationQuote: offer.amount, asyncPreparation: true,
+    selection: value.selection ? { ...value.selection, chosen: chosen.machine.id, openSkipped: skipped } : undefined });
+}
+
+function validateCandidate(machines, candidate) {
+  const current = machines.find((item) => item.id === candidate.machine.id && item.provider === "vultr");
+  if (!current || !current.locations.includes(candidate.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(candidate.capabilities))
+    throw new Error("Compute plan capacity changed. Generate a fresh plan.");
+  if (candidate.lease) {
+    const starter = machines.find((item) => item.id === candidate.body.plan && item.provider === "vultr");
+    if (!starter || !starter.locations.includes(candidate.body.region) || JSON.stringify(machineCapabilities(starter)) !== JSON.stringify(candidate.lease.starterCapabilities) ||
+        hourlyRate(starter) !== money(candidate.lease.starterHourlyRate) || hourlyRate(current) !== money(candidate.lease.targetHourlyRate))
+      throw new Error("Starter capacity or conversion rates changed. Generate a fresh plan.");
+  }
 }

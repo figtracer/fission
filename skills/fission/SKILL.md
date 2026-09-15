@@ -32,6 +32,8 @@ fission run NAME --harness HARNESS --mode MODE --budget AMOUNT \
 
 Run without `--approve` first. Inspect the quote, allocation, machine resources, timing evidence/uncertainty, source and outputs. Default policy allowances are 30m provisioning, 10m prebuilt or 1h source or 4h synced preparation, WORK, and 15m cleanup; they are not guarantees. If acceptable and already authorized, repeat exactly with `--approve`.
 
+Inspect the preview's fallback candidates and creation cap. Automatic selection prefers compatible quoted alternatives within the task budget, without a percentage premium rule; resources, region, duration and lifecycle headroom remain fixed. Fallback stops at purchase intent: uncertain creation never permits another rental. All currently eligible VM offers share one gateway. MPP and x402 are permitted, but only MPP/Tempo purchases are implemented; read `help rental` for gateway qualification rather than treating catalog presence as lifecycle support.
+
 For test/build mode provide public `--repo` and full-SHA `--ref`; use `--patch` for the one-time source patch. Use repeatable `--input FILE[=/workspace/path]` for workload files and `--artifact /workspace/file` for outputs. Assert that intended tests actually ran; a zero-test Cargo result is not validation.
 
 Inspect the preview's local cache check before renting. Clean builds can reuse exact-identity release binaries and save them after evidence collection; this is not a Cargo test/incremental cache. Identity mismatch falls back to compilation. Keep the cold preparation allowance until comparable timing establishes otherwise.

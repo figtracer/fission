@@ -8,6 +8,8 @@ The normal rental is one managed `fission run`; do not assemble plan/open/prepar
 
 Fission selects the cheapest compatible quote in the requested region while preserving harness floors. A shortlist average is not authority. Provider prepaid credit can outlive TOTAL and early close may not refund it; neither authorizes extra work. `fission advanced spending --refresh` verifies known Tempo USDC.e outflows but missing receipts and other assets remain unknown.
 
+Automatic plans retain compatible alternatives from the same quoted shortlist in ascending quote order. Failed final quotes or changed capacity can select another retained candidate **before purchase intent**, up to the approved task creation cap (budget minus lifecycle headroom). There is no percentage premium rule. Every candidate preserves the requested region, duration and resource floors, and is revalidated before payment. Explicit `--machine` plans and older plans without alternatives remain exact. A new invocation quotes afresh; an existing plan never gains unapproved alternatives. Once creation intent exists, errors are observed rather than used to buy a replacement.
+
 Every request, allocation, and ambiguous outcome remains in `FISSION_HOME`. Never reset history or submit a replacement because a command failed. Keep wallet/SSH credentials and runtime state outside source and reports.
 
 ## Durable lifecycle
@@ -34,3 +36,27 @@ Provider history remains material:
 - **smol-orthogonal (September 13, 2026):** lifecycle requests returned `expired_key`; authenticated lifecycle availability remained unresolved.
 
 Warnings do not automatically disqualify a compatible offer, but must be surfaced and interpreted before approval.
+
+## Gateway qualification
+
+MPP and x402 are permitted payment protocols. The implemented VM purchase path remains `compute-mpp` through `compute.x402layer.cc`; its Vultr plan alternatives are **not independent gateways**. Catalog reads and dry-run quotes have 60-second bounds; errors identify the stage, gateway and failed catalog category or plan. Preview reuses one complete catalog snapshot; purchase revalidates against a fresh snapshot. A catalog-wide outage still blocks selection. Failed shortlist quotes retain their reasons rather than only a count.
+
+Free discovery on September 15, 2026 found these additional candidates:
+
+| Gateway | Observed capability | Remaining blocker |
+| --- | --- | --- |
+| [VPS PhoneAgent](https://vps.phoneagent.xyz/llms.txt) via Mercator | x402 VPS rental; live monthly SKUs from $12.99 | Hourly sandboxes documented unavailable; Mercator `/rent` quotes returned non-retryable `invalid_challenge`/402; immediate destroy not documented |
+| [AgentMetal](https://agentmetal.dev/llms.txt) | Live VPS catalog from $1.20/day, SSH, US regions | Early destroy requires an account bearer key; no configured Base signing/authentication path or verified x86 lifecycle |
+| [Palmyr](https://palmyr.ai/compute/plans) | Hetzner x86 VPS plans, monthly billing, SSH and paid destroy | Mercator lists SSH-key registration only, not provision/status/destroy; all lifecycle calls require the original payer identity |
+| BlockRun via [Mercator](https://mercator.tempo.xyz/docs) | Direct 402 advertises $0.011 per 300s CPU sandbox and $0.002 per lifecycle call | Repeated create quotes return `invalid_challenge`; Mercator rejects exec/status/terminate as not cataloged. Direct endpoints respond in under a second; this is not evidence of a provisioning timeout |
+| Vaaya via [Mercator](https://mercator.tempo.xyz/docs) | Live advisory quotes: $0.05 per 300s create, $0.01 per exec | Mercator explicitly rejects status/terminate as not cataloged, although direct routes return payment challenges. No complete lifecycle or reserved x86 resources verified |
+| [OpenVPS](https://github.com/kartojal/openvps) | Independent Firecracker VM implementation with MPP, SSH, status and immediate delete | Published deployment `openvps.sh` refused HTTPS connections; code availability does not prove a running service |
+| [PayWeave Sandbox](https://sandbox.payweave.services/skill.md) | $0.01 single-use execution, MPP USDC.e or x402, at most 60s | No persistent machine, SSH, capacity guarantees or separate status/terminate routes; incompatible with existing managed preparation and artifact transfers |
+
+Palmyr's [pinned compute implementation](https://github.com/0xArtex/Palmyr/blob/64f9aa9113875762259a7b6a39d1d421b1e295de/src/routes/compute.ts) requires an explicit location to prevent automatic architecture substitution. Its destroy costs 0.10 USDC in addition to monthly provisioning. When an intermediary pays, the intermediary's wallet owns the VM: catalog discovery alone does not establish that later status and deletion will use the same identity.
+
+Mercator can accept Tempo payment while handling downstream x402, so direct Base signing is not inherently required. A usable integration still needs cataloged lifecycle routes, stable ownership, bounded full cost, recoverable request identity, Linux x86 resources and verified artifact/SSH/cleanup behavior. None of these newly discovered gateways has passed that complete Fission validation. Do not label them supported, create a second wallet, or infer refunds from a provider promise.
+
+The September 15 BlockRun/Vaaya checks compared fresh service descriptions, unsigned direct challenges, and Mercator quotes for all four operations. BlockRun's header contains x402 v2 resource/payment fields, while its JSON body omits the resource and also advertises an alternate `WWW-Authenticate` challenge. Parser incompatibility is a hypothesis, not a proven root cause; Mercator source was unavailable. Vaaya's create/exec quotes succeeded repeatedly. Its missing lifecycle routes are a distinct catalog restriction, not a timeout to retry indefinitely. A Python-urllib probe also hit an edge 403; curl reached the actual API, so that client-specific failure is not a provider outage.
+
+Enable a candidate only after the same payment/ownership route supports create, exec, status and terminate, and a bounded live cycle confirms execution, locally retained output and cleanup. Never use another Modal tenant's lifecycle endpoint as a workaround, buy an unmanageable sandbox to test an already-blocked route, or treat expiry as destruction. The dashboard's read-only Gateways view shows the usable subset of the metadata that `advanced capabilities` emits in full; dated per-call/per-month advisories stay separate from comparable live VM offers.

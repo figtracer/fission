@@ -9,6 +9,7 @@ import { units, amount } from "./budget.mjs";
 import { providerWarning } from "./provider.mjs";
 import { storage } from "./storage.mjs";
 import { availableMachines, quoteMachine } from "./ui-catalog.mjs";
+import { providers } from "./plans.mjs";
 
 const money = (value) => {
   if (value == null) return "unknown";
@@ -66,7 +67,8 @@ async function main() {
       transactions: transactions.map((item) => ({ paid: money(item.paid), operation: item.operation || "unknown", hash: item.hash })),
     };
   }));
-  console.log(JSON.stringify({ machines, message, available, storage: await storage().catch((error) => ({ directory: error.message, availableBytes: null })),
+  console.log(JSON.stringify({ machines, message, available, gateways: providers.filter(provider => provider.available),
+    storage: await storage().catch((error) => ({ directory: error.message, availableBytes: null })),
     spending: `paid ${money(report.paid)} ${report.currency}${report.pendingVerification || report.unresolvedRequests || report.unreadableRecords ? " + unknown" : ""}    allocated ${money(report.budget?.allocated)} / ${money(report.budget?.limit)}`,
   }));
 }

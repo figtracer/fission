@@ -29,6 +29,7 @@ export async function availableMachines({ cached = false } = {}) {
     seen.add(machine.id);
     const price = machine.our_daily.toFixed(6);
     machines.push({ id: machine.id, provider: "compute-mpp", providerWarning: Boolean(providerWarning("compute-mpp")),
+      operator: machine.provider,
       cpu: capacity.cpu, memory: capacity.memoryGiB, disk: Math.floor(capacity.diskGiB),
       daily: price, regions, withinCap: ceiling === null || units(price) <= units(ceiling) });
   }

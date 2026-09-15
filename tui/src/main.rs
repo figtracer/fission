@@ -36,7 +36,20 @@ struct Snapshot {
     message: String,
     available: Option<Catalog>,
     #[serde(default)]
+    gateways: Vec<Gateway>,
+    #[serde(default)]
     storage: Option<Storage>,
+}
+
+#[derive(Deserialize)]
+struct Gateway {
+    id: String,
+    gateway: String,
+    operator: String,
+    price: Option<String>,
+    payment: Option<String>,
+    limitations: Option<String>,
+    evidence: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +72,8 @@ struct Catalog {
 struct Offer {
     id: String,
     provider: String,
+    #[serde(default)]
+    operator: String,
     provider_warning: bool,
     cpu: f64,
     memory: f64,
@@ -126,11 +141,12 @@ struct View {
     help: bool,
     storage: bool,
     g_pending: bool,
+    quit_pending: bool,
     confirm: Option<String>,
     message: String,
     message_sticky: bool,
     available: bool,
-    all_prices: bool,
+    prices: PriceView,
     region: usize,
     collapsed: BTreeSet<GroupKey>,
 }
@@ -147,13 +163,31 @@ impl Default for View {
             help: false,
             storage: false,
             g_pending: false,
+            quit_pending: false,
             confirm: None,
             message: String::new(),
             message_sticky: false,
             available: false,
-            all_prices: false,
+            prices: PriceView::WithinBudget,
             region: 0,
             collapsed: BTreeSet::from([GroupKey::Retained]),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PriceView {
+    WithinBudget,
+    AllPrices,
+    Gateways,
+}
+
+impl PriceView {
+    fn next(self) -> Self {
+        match self {
+            Self::WithinBudget => Self::AllPrices,
+            Self::AllPrices => Self::Gateways,
+            Self::Gateways => Self::WithinBudget,
         }
     }
 }
@@ -163,9 +197,20 @@ fn offers<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Offer> {
         catalog
             .machines
             .iter()
-            .filter(|m| view.all_prices || m.within_cap)
+            .filter(|m| {
+                view.prices != PriceView::Gateways
+                    && (view.prices == PriceView::AllPrices || m.within_cap)
+            })
             .collect()
     })
+}
+
+fn available_count(data: &Snapshot, view: &View) -> usize {
+    if view.prices == PriceView::Gateways {
+        data.gateways.len()
+    } else {
+        offers(data, view).len()
+    }
 }
 
 const FILTERS: [&str; 3] = ["tasks", "active", "all records"];
@@ -366,6 +411,25 @@ fn snapshot_cue(previous: &Snapshot, next: &Snapshot) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
+fn quit_key(pending: &mut bool, key: &KeyEvent) -> bool {
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
+    if key.code == KeyCode::Char('q') {
+        if key.kind == KeyEventKind::Repeat {
+            return false;
+        }
+        if *pending {
+            *pending = false;
+            return true;
+        }
+        *pending = true;
+    } else {
+        *pending = false;
+    }
+    false
+}
+
 // External strings are data, never terminal controls or bidi instructions.
 fn clip(text: &str, width: usize) -> String {
     let safe: Vec<_> = text
@@ -458,9 +522,17 @@ fn render(
     let mut lines: Vec<(String, u8)> = Vec::new();
     let mut hits = Vec::new();
     if columns < 56 || height < 16 {
-        lines.push(("fission".into(), 1));
+        lines.push((
+            if view.quit_pending {
+                "Press q again to quit."
+            } else {
+                "fission"
+            }
+            .into(),
+            1,
+        ));
         lines.push(("Enlarge the terminal to at least 56 x 16.".into(), 0));
-        lines.push(("q quit".into(), 2));
+        lines.push(("qq quit".into(), 2));
     } else {
         lines.push((String::new(), 0));
         buttons(
@@ -488,7 +560,7 @@ fn render(
         lines.push(("-".repeat(width), 2));
         let count = height.saturating_sub(12).max(1);
         let length = if view.available {
-            offers(data, view).len()
+            available_count(data, view)
         } else {
             grouped(data, view).len()
         };
@@ -532,10 +604,11 @@ fn render(
                 ("Navigation", 1),
                 ("j/k move   h/Esc back   l/Enter open", 0),
                 ("gg/G first/last   Ctrl-u/Ctrl-d half page", 0),
-                ("Tab or 1/2 switch tabs   q quit", 0),
+                ("Tab or 1/2 switch tabs   qq quit", 0),
                 ("Click task to inspect; click SSH for a terminal.", 2),
                 ("f filter   s sort   r refresh", 0),
-                ("Available: b prices   [ / ] region", 0),
+                ("Available: b budget/all prices/gateways", 0),
+                ("VM offers: [ / ] region; Enter quotes without payment", 0),
                 ("Task: u resume   x stop   p provider check", 0),
                 ("tmux: SSH opens a popup; otherwise it is fullscreen.", 0),
                 ("Fullscreen SSH pauses dashboard refresh until exit.", 0),
@@ -545,12 +618,70 @@ fn render(
                 lines.push((text.into(), style));
             }
         } else if view.available {
-            if let Some(catalog) = &data.available {
+            if view.prices == PriceView::Gateways {
+                if view.detail {
+                    if let Some(gateway) = data.gateways.get(view.index) {
+                        lines.push((gateway.id.clone(), 1));
+                        lines.push((format!("{} -> {}", gateway.gateway, gateway.operator), 2));
+                        lines.push((String::new(), 0));
+                        let mut detail = Vec::new();
+                        for text in [
+                            &gateway.price,
+                            &gateway.payment,
+                            &gateway.limitations,
+                            &gateway.evidence,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            // Keep scope and billing units readable at narrow widths.
+                            let mut line = String::new();
+                            for word in text.split_whitespace() {
+                                if !line.is_empty() && line.len() + word.len() + 1 > width {
+                                    detail.push((line, 0));
+                                    line = String::new();
+                                }
+                                if !line.is_empty() {
+                                    line.push(' ');
+                                }
+                                line.push_str(word);
+                            }
+                            detail.push((line, 0));
+                        }
+                        view.offset = view.offset.min(detail.len().saturating_sub(1));
+                        lines.extend(detail.into_iter().skip(view.offset));
+                    }
+                } else {
+                    lines.push((
+                        format!("Gateways   {} available routes", data.gateways.len()),
+                        1,
+                    ));
+                    lines.push(("Gateway routes payments; operator runs compute.".into(), 2));
+                    lines.push((String::new(), 0));
+                    let nw = width.saturating_sub(19);
+                    lines.push((format!("  {:<nw$} operator", "route"), 2));
+                    for (i, gateway) in data.gateways.iter().enumerate().skip(view.top).take(count)
+                    {
+                        lines.push((
+                            format!(
+                                "{} {:<nw$} {}",
+                                if i == view.index { ">" } else { " " },
+                                clip(&gateway.gateway, nw),
+                                clip(&gateway.operator, 16),
+                            ),
+                            if i == view.index { 3 } else { 0 },
+                        ));
+                    }
+                }
+            } else if let Some(catalog) = &data.available {
                 let available = offers(data, view);
                 if view.detail {
                     if let Some(m) = available.get(view.index) {
                         lines.push((m.id.clone(), 1));
-                        lines.push((format!("{}   Linux x86_64", m.provider), 2));
+                        lines.push((
+                            format!("Gateway {} -> {}   Linux x86_64", m.provider, m.operator),
+                            2,
+                        ));
                         if m.provider_warning {
                             lines
                                 .push(("Provider history warning: verify availability.".into(), 2));
@@ -582,11 +713,11 @@ fn render(
                         lines.push(("Enter requests a fresh 24-hour quote.".into(), 2));
                     }
                 } else {
-                    lines.push((format!("Available   {} options", available.len()), 1));
+                    lines.push((format!("VM offers   {} options", available.len()), 1));
                     lines.push((
                         format!(
                             "{}   VM budget: {} USDC.e",
-                            if view.all_prices {
+                            if view.prices == PriceView::AllPrices {
                                 "All prices"
                             } else {
                                 "Within budget"
@@ -793,18 +924,22 @@ fn render(
         } else if view.storage {
             "Directory storage, managed by you.".into()
         } else if view.available {
-            data.available.as_ref().map_or_else(String::new, |c| {
-                format!(
-                    "{} {} UTC   GiB   USDC.e/day",
-                    if loading { "Refreshing" } else { "Updated" },
-                    c.fetched_at
-                        .replace('T', " ")
-                        .chars()
-                        .skip(5)
-                        .take(11)
-                        .collect::<String>()
-                )
-            })
+            if view.prices == PriceView::Gateways {
+                "Advisory prices have different billing units; not comparable VM quotes.".into()
+            } else {
+                data.available.as_ref().map_or_else(String::new, |c| {
+                    format!(
+                        "{} {} UTC   GiB   USDC.e/day",
+                        if loading { "Refreshing" } else { "Updated" },
+                        c.fetched_at
+                            .replace('T', " ")
+                            .chars()
+                            .skip(5)
+                            .take(11)
+                            .collect::<String>()
+                    )
+                })
+            }
         } else if view.detail {
             selected(data, view).map_or_else(String::new, |m| {
                 if m.exported.is_empty() {
@@ -818,7 +953,10 @@ fn render(
         };
         lines.push((status, 2));
         if busy {
-            lines.push(("Working... q exits after the operation finishes.".into(), 2));
+            lines.push((
+                "Working... qq exits after the operation finishes.".into(),
+                2,
+            ));
         } else if view.confirm.is_some() {
             buttons(
                 &mut lines,
@@ -831,7 +969,13 @@ fn render(
         } else if view.help || view.storage {
             buttons(&mut lines, &mut hits, &[("[Esc Back]", KeyCode::Esc)]);
         } else if view.detail {
-            if view.available {
+            if view.available && view.prices == PriceView::Gateways {
+                buttons(
+                    &mut lines,
+                    &mut hits,
+                    &[("[h Back]", KeyCode::Esc), ("[b View]", KeyCode::Char('b'))],
+                );
+            } else if view.available {
                 buttons(
                     &mut lines,
                     &mut hits,
@@ -868,7 +1012,7 @@ fn render(
                     ("[Enter Open]", KeyCode::Enter),
                     (
                         if view.available {
-                            "[b Prices]"
+                            "[b Prices/Gateways]"
                         } else {
                             "[f Filter]"
                         },
@@ -878,10 +1022,14 @@ fn render(
                 ],
             );
         }
-        lines.push((
-            "j/k move  h/l back/open  Tab tabs  ? help  q quit".into(),
-            2,
-        ));
+        lines.push(if view.quit_pending {
+            ("Press q again to quit; any other key cancels.".into(), 1)
+        } else {
+            (
+                "j/k move  h/l back/open  Tab tabs  ? help  qq quit".into(),
+                2,
+            )
+        });
     }
     let mut out = Vec::new();
     for y in 0..height {
@@ -1019,7 +1167,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut quitting = false;
     let mut previous = Vec::new();
     loop {
-        quitting |= interrupted.load(Ordering::Relaxed) || terminated.load(Ordering::Relaxed);
+        if interrupted.load(Ordering::Relaxed) || terminated.load(Ordering::Relaxed) {
+            view.quit_pending = false;
+            quitting = true;
+        }
         if let Some(rx) = &pending {
             match rx.receiver.try_recv() {
                 Ok(result) => {
@@ -1039,8 +1190,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             data = new;
                             if view.available {
-                                view.index =
-                                    view.index.min(offers(&data, &view).len().saturating_sub(1));
+                                view.index = view
+                                    .index
+                                    .min(available_count(&data, &view).saturating_sub(1));
                             } else {
                                 restore_selection(&data, &mut view, previous_selection);
                                 view.offset = view.offset.min(
@@ -1103,7 +1255,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             let selected_id =
                                 offers(&data, &view).get(view.index).map(|m| m.id.clone());
                             data.available = new.available;
-                            if view.available {
+                            if view.available && view.prices != PriceView::Gateways {
                                 view.index = offers(&data, &view)
                                     .iter()
                                     .position(|m| Some(&m.id) == selected_id.as_ref())
@@ -1143,7 +1295,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             &mut previous,
         )?;
         if event::poll(Duration::from_millis(250))? {
-            let mut key = match event::read()? {
+            let input = event::read()?;
+            if matches!(
+                input,
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::Down(_) | MouseEventKind::Drag(_)
+                            | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                            | MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+                    )
+            ) {
+                view.quit_pending = false;
+            }
+            let mut key = match input {
                 Event::Key(key) => key,
                 Event::Mouse(mouse) if pending.is_none() => {
                     let code = match mouse.kind {
@@ -1168,7 +1333,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 let count = usize::from(height).saturating_sub(12).max(1);
                                 let row = usize::from(mouse.row);
                                 let length = if view.available {
-                                    offers(&data, &view).len()
+                                    available_count(&data, &view)
                                 } else {
                                     grouped(&data, &view).len()
                                 };
@@ -1191,11 +1356,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if key.kind == KeyEventKind::Release {
                 continue;
             }
-            if key.code == KeyCode::Char('q')
-                || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-            {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                view.quit_pending = false;
                 quitting = true;
                 view.message = "Finishing the current operation...".into();
+                continue;
+            }
+            if quit_key(&mut view.quit_pending, &key) {
+                quitting = true;
+                view.message = "Finishing the current operation...".into();
+                continue;
+            }
+            if key.code == KeyCode::Char('q') {
+                view.g_pending = false;
                 continue;
             }
             if pending.is_some() || quitting {
@@ -1265,7 +1438,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if !view.detail {
                     let length = if view.available {
-                        offers(&data, &view).len()
+                        available_count(&data, &view)
                     } else {
                         grouped(&data, &view).len()
                     };
@@ -1335,15 +1508,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else if view.available {
                 let rows = offers(&data, &view);
                 match key.code {
+                    KeyCode::Up | KeyCode::Char('k')
+                        if view.detail && view.prices == PriceView::Gateways =>
+                    {
+                        view.offset = view.offset.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j')
+                        if view.detail && view.prices == PriceView::Gateways =>
+                    {
+                        view.offset = view.offset.saturating_add(1);
+                    }
                     KeyCode::Up | KeyCode::Char('k') if !view.detail => {
                         view.index = view.index.saturating_sub(1)
                     }
                     KeyCode::Down | KeyCode::Char('j') if !view.detail => {
-                        view.index = (view.index + 1).min(rows.len().saturating_sub(1))
+                        view.index =
+                            (view.index + 1).min(available_count(&data, &view).saturating_sub(1))
                     }
                     KeyCode::Char('b') => {
-                        view.all_prices = !view.all_prices;
+                        view.prices = view.prices.next();
                         view.index = 0;
+                        view.top = 0;
+                        view.offset = 0;
                         view.detail = false;
                         view.message.clear();
                     }
@@ -1365,7 +1551,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some(m) = rows.get(view.index).filter(|m| !m.regions.is_empty()) {
+                        if view.prices == PriceView::Gateways {
+                            // Gateway metadata is read-only, including implemented routes.
+                            view.detail = data.gateways.get(view.index).is_some();
+                            view.offset = 0;
+                            view.message.clear();
+                        } else if let Some(m) =
+                            rows.get(view.index).filter(|m| !m.regions.is_empty())
+                        {
                             if view.detail {
                                 action = Some(("quote", serde_json::json!({"id": m.id, "region": m.regions[view.region % m.regions.len()]}).to_string()));
                             } else {
@@ -1592,6 +1785,32 @@ mod tests {
     }
 
     #[test]
+    fn gateway_view_never_exposes_quotable_offers_and_works_without_catalog() {
+        let mut data: Snapshot = serde_json::from_value(serde_json::json!({
+            "machines": [], "spending": "", "message": "",
+            "gateways": [{"id": "modal-tempo", "gateway": "Tempo", "operator": "Modal"}],
+            "available": {"ceiling": "0.25", "fetchedAt": "2026-09-15T00:00:00Z", "machines": [
+                {"id": "cheap", "provider": "compute-mpp", "operator": "vultr", "providerWarning": false,
+                 "cpu": 1, "memory": 2, "disk": 50, "daily": "0.22", "regions": ["ams"], "withinCap": true},
+                {"id": "expensive", "provider": "compute-mpp", "operator": "vultr", "providerWarning": false,
+                 "cpu": 4, "memory": 8, "disk": 100, "daily": "1", "regions": ["ams"], "withinCap": false}
+            ]}
+        })).unwrap();
+        let mut view = View::default();
+        assert_eq!(offers(&data, &view)[0].id, "cheap");
+        assert_eq!(available_count(&data, &view), 1);
+        view.prices = view.prices.next();
+        assert_eq!(available_count(&data, &view), 2);
+        view.prices = view.prices.next();
+        assert!(offers(&data, &view).is_empty());
+        assert_eq!(available_count(&data, &view), 1);
+        data.available = None;
+        assert_eq!(available_count(&data, &view), 1);
+        view.prices = view.prices.next();
+        assert_eq!(available_count(&data, &view), 0);
+    }
+
+    #[test]
     fn tasks_show_managed_and_nonclosed_records_and_group_experiments() {
         let data = snapshot(vec![
             machine("pair-tests", true, true, false, Some(("pair", "tests"))),
@@ -1686,5 +1905,31 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn quit_requires_two_consecutive_nonrepeat_q_presses() {
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let other = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let repeat =
+            KeyEvent::new_with_kind(KeyCode::Char('q'), KeyModifiers::NONE, KeyEventKind::Repeat);
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        let mut pending = false;
+
+        assert!(!quit_key(&mut pending, &q));
+        assert!(pending);
+        assert!(!quit_key(&mut pending, &repeat));
+        assert!(pending);
+        assert!(!quit_key(&mut pending, &release));
+        assert!(pending);
+        assert!(!quit_key(&mut pending, &other));
+        assert!(!pending);
+        assert!(!quit_key(&mut pending, &q));
+        assert!(quit_key(&mut pending, &q));
+        assert!(!pending);
     }
 }
