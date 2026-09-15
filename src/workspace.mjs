@@ -81,11 +81,13 @@ export function validateRecipe(value) {
 }
 
 export function duration(text) {
-  const match = /^(\d+)(s|m|h)$/.exec(text || "");
-  if (!match) throw new Error("Specify a duration, such as 15m or 2h.");
-  const seconds = Number(match[1]) * { s: 1, m: 60, h: 3600 }[match[2]];
-  if (!Number.isSafeInteger(seconds) || seconds < 60 || seconds > 86400)
-    throw new Error("Duration must be between 60 seconds and 24 hours.");
+  const match = /^(\d+)(s|m|h|d)$/.exec(text || "");
+  if (!match) throw new Error("Specify a duration, such as 15m, 2h or 3d.");
+  const seconds = Number(match[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[match[2]];
+  // Date/JSON arithmetic must remain representable; provider quotes determine
+  // feasible leases, not an arbitrary one-day product ceiling.
+  if (!Number.isSafeInteger(seconds * 1000 + Date.now()) || seconds < 60 || !Number.isFinite(new Date(Date.now() + seconds * 1000).getTime()))
+    throw new Error("Duration must be at least 60 seconds and have a representable deadline.");
   return seconds;
 }
 

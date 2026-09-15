@@ -7,8 +7,8 @@ import { refresh, reconcile, active, upload, download, close, operationCap, prep
 
 import { budget } from "./budget.mjs";
 import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
-import { harnesses } from "./harnesses.mjs";
-import { runTask, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
+import { harnesses, taskOptions } from "./harnesses.mjs";
+import { runTask, runMachines, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 import { help } from "./help.mjs";
@@ -86,6 +86,7 @@ async function main() {
     const [command] = positionals;
     const topic = command === "help" ? positionals.slice(1)
       : positionals.slice(0, ["cache", "dataset", "skill"].includes(command) ? 2 : 1);
+    if (!advanced && command === "run" && values.harness) topic.push(values.harness);
     console.log(await help(advanced ? ["advanced", ...topic] : topic)); return;
   }
   if (advanced && !positionals.length) { console.log(await help(["advanced"])); return; }
@@ -103,7 +104,7 @@ async function main() {
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
   if (!advanced) {
-    allowed.run = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "cpu", "memory", "disk", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "approve", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
+    allowed.run = values.from ? ["from", "budget", "approve"] : [...taskOptions, "approve"];
     allowed.status = ["refresh", "resume", "wait"];
   }
   for (const option of Object.keys(values))
@@ -172,7 +173,8 @@ async function main() {
     case "jobs": emit((await listJobs(name)).map(jobSummary)); break;
     case "run": {
       if (!advanced) {
-        const result = await runTask(name, values, tail); emit(result);
+        if (values.from && tail.length) throw new Error("The experiment file supplies each machine's argv; do not add a command after --.");
+        const result = values.from ? await runMachines(name, values) : await runTask(name, values, tail); emit(result);
         if (result.status === "unavailable") process.exitCode = 2;
         break;
       }
@@ -214,7 +216,12 @@ async function main() {
       if (!advanced) {
         if (!name && (values.resume || values.refresh || values.wait)) throw new Error("Select one task for --resume, --refresh or --wait.");
         if (values.resume) await resumeTask(name);
-        if (values.refresh) await refresh(name);
+        if (values.refresh) {
+          const current = await taskStatus(name);
+          if (current.machines) {
+            for (const item of current.machines) if (item.phase !== "not_purchased") await refresh(item.name);
+          } else await refresh(name);
+        }
         const until = Date.now() + (values.wait ? duration(values.wait) * 1000 : 0);
         let result;
         do {

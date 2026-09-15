@@ -1,13 +1,16 @@
 import { readFile, stat } from "node:fs/promises";
 import { resolve, isAbsolute } from "node:path";
-import { recipe, duration } from "./workspace.mjs";
+import { recipe, duration, sourceRecipes } from "./workspace.mjs";
 import { fingerprint } from "./experiments.mjs";
+
+// Shared by CLI validation and multi-machine manifests.
+export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "cpu", "memory", "disk", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
 
 // One selection contract; recipes remain the pinned preparation source of truth.
 export const harnesses = {
-  foundry: { modes: ["tools", "build"], description: "Contract tests, fuzz/invariants, symbolic properties, or build Foundry itself." },
-  reth: { modes: ["dev", "build", "synced"], description: "Private development chain, client build, or Ethereum mainnet with Lighthouse. Base/BSC clients are not implemented." },
-  tempo: { modes: ["dev", "tools", "build"], description: "Private Tempo chain, Foundry's Tempo contract model, or client build." },
+  foundry: { modes: ["tools", "test", "build"], description: "Contract tests, fuzz/invariants, symbolic properties, or test/build Foundry itself." },
+  reth: { modes: ["dev", "test", "build", "synced"], description: "Private development chain, client tests/build, or Ethereum mainnet with Lighthouse. Base/BSC clients are not implemented." },
+  tempo: { modes: ["dev", "tools", "test", "build"], description: "Private Tempo chain, Foundry's Tempo contract model, or client tests/build." },
   linux: { modes: ["tools"], description: "Plain Linux x86 shell/Python fallback." },
 };
 
@@ -16,12 +19,13 @@ export async function taskSpec(options, command) {
   if (!Object.hasOwn(harnesses, harness || "")) throw new Error("Choose --harness foundry, reth, tempo, or linux.");
   const mode = options.mode || harnesses[harness].modes[0];
   if (!harnesses[harness].modes.includes(mode)) throw new Error(`Modes for ${harness}: ${harnesses[harness].modes.join(", ")}.`);
+  const source = ["test", "build"].includes(mode);
   if (options.chain !== undefined && (harness !== "reth" || options.chain !== "ethereum"))
     throw new Error("Only Reth's ethereum variant is implemented; Base-Reth and Reth-BSC are unavailable.");
   if (!command.length || command.some((arg) => !arg || arg.includes("\0"))) throw new Error("Supply the workload argv after --.");
   if (options.solver && (harness !== "foundry" || mode !== "tools" || options.solver !== "z3")) throw new Error("--solver z3 applies to Foundry tools.");
-  if (options.patch && mode !== "build") throw new Error("--patch applies to a pinned client build; use --input for other workload files.");
-  if (mode === "build" && (!options.repo || !options.ref)) throw new Error("Client builds require public --repo and exact --ref; --patch supplies changed source.");
+  if (options.patch && !source) throw new Error("--patch applies to pinned client test/build modes; use --input for other workload files.");
+  if (source && (!options.repo || !options.ref)) throw new Error("Client tests/builds require public --repo and exact --ref; --patch supplies changed source.");
   if (options.repo || options.ref) {
     if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(options.repo || "") || !/^[a-f0-9]{40}$/.test(options.ref || ""))
       throw new Error("Use a public GitHub --repo and a full 40-character --ref commit.");
@@ -32,7 +36,7 @@ export async function taskSpec(options, command) {
   // Policy allowances, not measured maxima. Leave transfer variance and bounded
   // SSH/export/DELETE time; never silently purchase a longer authorization.
   const timing = {
-    provisioningSeconds: 1800, preparationSeconds: mode === "synced" ? 14400 : mode === "build" ? 3600 : 600,
+    provisioningSeconds: 1800, preparationSeconds: mode === "synced" ? 14400 : source ? 3600 : 600,
     workSeconds: work, cleanupSeconds: 900, authorizedSeconds: total,
     basis: "30m provisioning allows the observed 13m migration plus guest checks; 15m cleanup allows bounded transfers and confirmation. Planning allowances are not guarantees.",
     evidence: mode === "synced" ? {
@@ -41,10 +45,10 @@ export async function taskSpec(options, command) {
       snapshotBlock: 25962390, downloadBytes: 726194576598, outputBytes: 962683657146,
       importSeconds: 3543.768, indexSeconds: 2427.639, importStartToReadySeconds: 9660.188, rentalToReadySeconds: 13173.091,
       readyAt: "2026-09-14T12:39:52.836046Z", uncertainty: "Includes diagnostics/migration; network throughput unmeasured. Unknown on smaller machines or newer snapshots; one live sample, not a universal bound.",
-    } : mode === "build" ? {
-      date: "2026-09-14", sampleCount: harness === "foundry" ? 1 : 0,
-      ...(harness === "foundry" ? { name: "cache-build-proof", buildSeconds: 667.354 } : {}),
-      uncertainty: "1h planning allowance, not a cold-build prediction. Revision, machine and dependency cache change build time. See retained build reports; no measured bound at the resource floor.",
+    } : source ? {
+      date: "2026-09-14", sampleCount: mode === "build" && harness === "foundry" ? 1 : 0,
+      ...(mode === "build" && harness === "foundry" ? { name: "cache-build-proof", buildSeconds: 667.354 } : {}),
+      uncertainty: "1h conservative source preparation allowance, not a measured bound. Test mode installs the toolchain/dependencies without compiling: test compilation consumes WORK. Build mode may reuse verified binaries; otherwise it compiles during preparation.",
     } : { date: "2026-09-15", sampleCount: 1, name: "native-fee-proof", bootstrapSeconds: 10.105,
       machine: "Amsterdam, 1 vCPU, 2 GiB nominal, Linux x86_64/glibc 2.39", clients: "Forge/Cast 1.8.1, Tempo 1.14.0",
       uncertainty: "Combined prebuilt preparation sample, not a per-client prediction. 10m allows download variance; no guaranteed network throughput." },
@@ -56,7 +60,7 @@ export async function taskSpec(options, command) {
   }
   timing.requiredSeconds = timing.provisioningSeconds + timing.preparationSeconds + work + timing.cleanupSeconds;
   if (timing.requiredSeconds > total) throw new Error(`Duration too short: ${timing.provisioningSeconds}s provisioning + ${timing.preparationSeconds}s preparation + ${work}s workload + ${timing.cleanupSeconds}s cleanup = ${timing.requiredSeconds}s required; ${total}s authorized. No quote or purchase submitted.`);
-  let selected = mode === "build" ? `${harness}-source` : mode === "synced" ? "reth-synced" : harness === "tempo" && mode === "tools" ? "foundry" : harness;
+  let selected = source ? `${harness}-source` : mode === "synced" ? "reth-synced" : harness === "tempo" && mode === "tools" ? "foundry" : harness;
   if (options.solver) selected = "foundry-symbolic";
   const definition = await recipe(selected), inputs = [], preparation = [];
   for (const mapping of options.input || []) {
@@ -97,14 +101,14 @@ export async function taskSpec(options, command) {
     preparation.push(["/workspace/ethereum", "download", "--manifest", manifestFile.remote, "--sha256", manifestFile.sha256, "--plan", planFile.remote, "--extra-disk-gib", String(extra)],
       ["/workspace/ethereum", "start", "--checkpoint-url", checkpoint.href, "--checkpoint", options.checkpoint, "--max-head-age", String(age)]);
   }
-  if (mode === "build") {
+  if (source) {
     if (options.patch) {
       const patch = { local: resolve(options.patch), remote: "/workspace/source.patch", ...await fingerprint(options.patch) };
       if (!patch.bytes) throw new Error("Patch must be nonempty (git diff --binary HEAD).");
       inputs.push(patch);
       preparation.push(["python3", "/workspace/.fission/rust-source.py", "apply", patch.remote, patch.sha256]);
     }
-    preparation.push(["/workspace/build"]);
+    if (mode === "build") preparation.push(["python3", "/workspace/.fission/rust-source.py", "ensure-build", ...sourceRecipes[selected]]);
   }
   if (new Set(inputs.map((input) => input.remote)).size !== inputs.length) throw new Error("Input destinations must be unique.");
   const artifacts = options.artifact || [];
@@ -112,7 +116,7 @@ export async function taskSpec(options, command) {
   const cwd = options.cwd || (options.repo ? "/workspace/source" : "/workspace");
   if (!isAbsolute(cwd) || cwd.includes("\0")) throw new Error("--cwd must be an absolute guest directory.");
   return { definition, disk, task: { harness, mode, command, cwd, inputs, preparation, artifacts,
-    scope: mode === "build" ? "build" : ["dev", "synced"].includes(mode) ? "node" : "tools",
+    scope: mode === "test" ? "source" : mode === "build" ? "build" : ["dev", "synced"].includes(mode) ? "node" : "tools",
     maxHeadAge: options["max-head-age"], timing, output: resolve(options.output || "fission"),
     context: harness === "tempo" && mode === "tools" ? "Foundry Tempo execution model; this does not run a Tempo node." : harnesses[harness].description } };
 }

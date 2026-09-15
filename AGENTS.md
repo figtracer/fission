@@ -10,7 +10,9 @@ Fission turns an authorized budget, duration, source/input, workload argv, and c
 4. Observe with `fission status NAME [--wait DURATION]`. After local sleep/reboot, use `--resume`; this resumes the same recorded work and never purchases or submits it again.
 5. Use `fission stop NAME` for early cancellation, then status until cleanup is confirmed. Unknown is never confirmed destruction.
 
-Use `--repo` with a public GitHub URL and `--ref` with a full 40-character SHA for build mode. `--patch` is applied once before `/workspace/build`; use `--input FILE[=/workspace/path]` for regular workload files and `--artifact /workspace/file` for bounded outputs. Keep credentials out of argv, patches, inputs, logs, and reports.
+Use `--repo` with a public GitHub URL and `--ref` with a full 40-character SHA for test/build modes. `test` prepares source and runs the selected Cargo tests without a release build first; `build` produces release binaries. `--patch` is applied once before testing/building; use `--input FILE[=/workspace/path]` for regular workload files and `--artifact /workspace/file` for bounded outputs. Keep credentials out of argv, patches, inputs, logs, and reports.
+
+Read `help run HARNESS` for scoped options and `help index WORDS` for revision-pinned guidance. Verify differing revisions against source/help. Source previews inspect local caches before quotes; exact-identity release-binary reuse is not Cargo test/incremental caching. Inspect artifact collection separately from test success. For explicitly approved multi-machine work, `run NAME --from FILE --budget TOTAL` uses ordinary per-role tasks and a summed budget; purchases are sequential, with no automatic replacements. Multi-day durations still require explicit authorization.
 
 All manual lifecycle, jobs, transfers, reports, storage, cache, dataset, SSH, and discovery commands are secondary: `fission advanced COMMAND`. Never mutate a managed task through advanced commands while its supervisor is alive.
 

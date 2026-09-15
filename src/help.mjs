@@ -1,4 +1,4 @@
-import { guide, guideTopics } from "./onboarding.mjs";
+import { guide, guideTopics, guidance } from "./onboarding.mjs";
 import { harnesses } from "./harnesses.mjs";
 
 const run = `Run a managed Linux task; preview without --approve.
@@ -12,25 +12,31 @@ the environment, runs the argv, collects evidence, then destroys and confirms.
 The local supervisor survives terminal/agent disconnect. No replacement purchase.
 
 Options:
-  --mode MODE             Foundry tools|build; Reth dev|build|synced;
-                          Tempo dev|tools|build; Linux tools. First is default.
-  --repo URL --ref SHA     Public GitHub source at a full commit; required for build
-  --patch FILE            Build: apply git diff --binary HEAD once before compiling
+  --mode MODE             See harness help; test never builds release binaries first
+  --repo URL --ref SHA     Public GitHub source at a full commit; required for test/build
+  --patch FILE            Apply git diff --binary HEAD once before source test/build
   --input FILE[=REMOTE]    Upload a regular file, repeatable; default /workspace/basename
   --artifact /workspace/F Collect an output file, repeatable (not a database)
   --cwd DIR               Guest cwd; default /workspace/source with repo, else /workspace
   --cpu N --memory GiB --disk GiB  Raise harness resource floors
   --prepare-duration D    Raise the preparation allowance for this task
-  --solver z3             Foundry tools: pinned Z3 for bounded symbolic properties
   --output DIR            Local timestamped reports (default ./fission)
 
-Synced Reth also requires --manifest FILE --snapshot-plan FILE (canonical full
-planner JSON), --checkpoint-url HTTPS_URL --checkpoint ROOT:EPOCH,
---max-head-age SECONDS --extra-disk-gib GiB. Read fission help reth first.
---chain ethereum is the only implemented Reth variant; Base/BSC reject.
+Ecosystem-specific options: fission help foundry, reth, or tempo.
+Source tasks inspect local caches before quotes. Binary cache candidates require
+exact guest verification; they are not Cargo test caches. See help harnesses.
+
+Multiple machines: fission run NAME --from experiment.json --budget TOTAL [--approve]
+The file supplies schemaVersion: 1 and machines: [{name, harness, mode, budget,
+duration, "work-duration", region, command: ["program", "arg"], ...run options}].
+Each role has explicit resources/time/cost. File paths resolve beside the manifest.
+Preview shows all machines and summed allocations before any purchase. Approval
+accepts that set; payments are not atomic and later failure never buys a replacement.
+Group stop during creation waits for the approved purchase sequence, then cancels
+all purchased roles. Use status/stop NAME or NAME-ROLE. No machine-count limit.
 
 TOTAL includes provisioning + preparation + WORK + cleanup. Default allowances:
-30m provisioning, 10m prebuilt / 1h build / 4h synced preparation, 15m cleanup.
+30m provisioning, 10m prebuilt / 1h source / 4h synced preparation, 15m cleanup.
 They are planning policy based on dated observations, not performance guarantees.
 Preview includes the evidence and uncertainty. Short plans reject before spending.
 The prepaid lease can outlive TOTAL; no extra execution is authorized by credit.
@@ -112,10 +118,14 @@ Usage: fission                     Open the Rust task dashboard
 Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
 Read help run first. No embedded agent runs in the VM.
 MPP/Tempo only; --approve uses existing budget and duration authorization.
-Durations: s/m/h, 60s–24h. Memory/disk: GiB. Money: USDC.e.
+Durations: s/m/h/d, at least 60s; provider availability and authorization bound leases.
+Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
   if (key === "run") return `fission run — ${run}`;
+  if (parts[0] === "index") return JSON.stringify(await guidance(parts.slice(1).join(" ")), null, 2);
+  if (parts[0] === "run" && parts.length === 2 && Object.hasOwn(harnesses, parts[1]))
+    return `${await help(["run"])}\n\n${await help([parts[1]])}`;
   if (key === "status") return `fission status — ${status}`;
   if (key === "budget") return `fission budget — ${budget}`;
   if (key === "stop") return "fission stop — Cancel the managed task and collect available evidence before teardown.\n\nUsage: fission stop NAME\n\nReturns recorded cancellation intent; use status NAME --wait DURATION to confirm\ncleanup. Repeating stop observes the same task, not a second purchase or DELETE.";
@@ -126,7 +136,8 @@ FISSION_HOME selects the existing durable state and ledger.`;
     return `fission advanced ${command} — Low-level recovery.\n\nUsage: fission advanced ${command} ${advanced[command]}\n\nRead help rental for lifecycle safety, help harnesses for preparation/storage.\nRepair requires inspecting partial effects before --approve. Unknown launches and\ntermination outcomes must be observed, never replayed. Output remains structured.`;
   }
   if (key === "guides") return guide();
-  if (parts.length === 1 && Object.hasOwn(harnesses, key) && key !== "reth") return guide(`harnesses/${key}`);
+  if (parts.length === 1 && Object.hasOwn(harnesses, key))
+    return (await guide(`harnesses/${key}`)) + (key === "reth" ? `\n\n${await guide("reth")}` : "");
   if (parts.length === 1 && guideTopics.includes(key.split("/")[0])) return guide(key);
   throw new Error(`Unknown help topic: ${key}. Use fission help or fission help advanced.`);
 }

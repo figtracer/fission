@@ -96,7 +96,10 @@ const catalogPrice = (machine) => {
 };
 
 function rentalFor(machine, machines, seconds, region) {
-  if (seconds === 86400) return { estimate: catalogPrice(machine) };
+  if (seconds >= 86400) {
+    const days = Math.ceil(seconds / 86400);
+    return { estimate: catalogPrice(machine) * BigInt(days), prepaidHours: days * 24 };
+  }
   const family = resizeFamily(machine.id);
   if (!family) return null;
   const targetRate = hourlyRate(machine), candidates = [];
@@ -153,22 +156,22 @@ export async function machineOffers(options) {
   candidates.sort((a, b) => a.estimate < b.estimate ? -1 : a.estimate > b.estimate ? 1 : a.machine.id.localeCompare(b.machine.id));
   const offers = [];
   let quoteFailures = 0, changedBeyondCap = 0;
-  for (const { machine, capabilities, estimate, lease } of candidates.slice(0, shortlistSize)) {
+  for (const { machine, capabilities, estimate, lease, prepaidHours } of candidates.slice(0, shortlistSize)) {
     let offer, quoted;
     try {
-      offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: lease?.prepaidHours || 24, label: "fission-quote" }, "compute-mpp");
+      offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: lease?.prepaidHours || prepaidHours, label: "fission-quote" }, "compute-mpp");
       quoted = quotedLease(lease, offer.amount);
     }
     catch { quoteFailures++; continue; }
     if (money(offer.amount) > money(cap)) { changedBeyondCap++; continue; }
     offers.push({ provider: "compute-mpp", providerWarning: providerWarning("compute-mpp"), machine: machine.id, region: options.region, capabilities,
       creationQuote: offer.amount, catalogEstimate: amount(estimate), catalogCachedAt: machine.cached_at,
-      quotedAt: new Date().toISOString(), leaseHours: lease ? null : 24, requestedHours: seconds / 3600, lease: quoted });
+      quotedAt: new Date().toISOString(), leaseHours: lease ? null : prepaidHours, requestedHours: seconds / 3600, lease: quoted });
   }
   offers.sort((a, b) => money(a.creationQuote) < money(b.creationQuote) ? -1 : money(a.creationQuote) > money(b.creationQuote) ? 1 : a.machine.localeCompare(b.machine));
   const prices = offers.map((offer) => money(offer.creationQuote));
   return { status: offers.length ? "quoted" : "unavailable", profile, requirements, ceiling: cap, currency: "USDC.e",
-    region: options.region, leaseHours: seconds === 86400 ? 24 : null, requestedHours: seconds / 3600, paymentSubmitted: false,
+    region: options.region, leaseHours: seconds >= 86400 ? Math.ceil(seconds / 86400) * 24 : null, requestedHours: seconds / 3600, paymentSubmitted: false,
     offers, average: prices.length ? { amount: amount((prices.reduce((a, b) => a + b, 0n) + BigInt(prices.length) - 1n) / BigInt(prices.length)),
       minimum: amount(prices[0]), maximum: amount(prices.at(-1)), sampleCount: prices.length, providerCount: 1,
       basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for the requested target duration. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
@@ -265,7 +268,7 @@ export async function createPlan(name, options, task) {
       if (result.code !== 0) throw new Error("Could not create workspace SSH key.");
     }
     body = { plan: rental.lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
-      prepaid_hours: rental.lease?.prepaidHours || 24, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
+      prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
   }
   const offer = await quote("create", body, provider);
   if (money(offer.amount) > money(creationCap)) throw new Error("Creation quote exceeds its cap.");
