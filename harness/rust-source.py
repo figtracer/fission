@@ -55,14 +55,39 @@ def sha(path):
         return hashlib.file_digest(file, 'sha256').hexdigest()
 
 
+def working_tree(source, env):
+    # Git owns file modes, binary content, symlinks and ignore rules. A scratch
+    # index hashes the actual build inputs without modifying the user's index.
+    # Gitlinks capture commits, not dirty files inside submodules. Refuse those
+    # inputs rather than assigning different builds the same identity.
+    if subprocess.check_output(['git', 'submodule', 'foreach', '--recursive', '--quiet',
+                                'git status --porcelain --ignore-submodules=none'],
+                               cwd=source, env=env, text=True).strip():
+        raise RuntimeError('Submodule worktrees must be clean; build identity records their commits')
+    with tempfile.TemporaryDirectory() as scratch:
+        env = {**env, 'GIT_INDEX_FILE': str(pathlib.Path(scratch) / 'index')}
+        subprocess.run(['git', 'read-tree', 'HEAD'], cwd=source, env=env, check=True)
+        subprocess.run(['git', 'add', '-A'], cwd=source, env=env, check=True)
+        return subprocess.check_output(['git', 'write-tree'], cwd=source, env=env, text=True).strip()
+
+
+def apply_patch(source, patch, expected):
+    if sha(patch) != expected:
+        raise RuntimeError('Patch differs from the planned input')
+    if subprocess.check_output(['git', 'status', '--porcelain', '--ignore-submodules=none'], cwd=source):
+        raise RuntimeError('Apply a patch only to the pristine pinned checkout')
+    subprocess.run(['git', 'apply', '--whitespace=nowarn', str(patch)], cwd=source, check=True)
+
+
 def identity(source, binaries, env):
     def output(argv):
         return subprocess.check_output(argv, cwd=source, env=env, text=True).strip()
-    changes = output(['git', 'status', '--porcelain'])
+    changes = output(['git', 'status', '--porcelain', '--ignore-submodules=none'])
     # Native CPU tuning can produce instructions unavailable on a later rental.
     flags = {key: value for key, value in env.items() if key.startswith(('CARGO_', 'RUST', 'CC_', 'CXX_')) or key in
              ['CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'LLVM_SYS_221_PREFIX']}
     return {'schemaVersion': 1, 'commit': output(['git', 'rev-parse', 'HEAD']), 'clean': not changes,
+            'tree': working_tree(source, env),
             'lockSha256': sha(source / 'Cargo.lock'), 'submodules': output(['git', 'submodule', 'status', '--recursive']),
             'toolchain': output(['/workspace/rustc', '-vV']), 'binaries': binaries, 'profile': 'release',
             'cpuFeatures': sorted(next(line.split(':', 1)[1].split() for line in pathlib.Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('flags'))),
@@ -73,8 +98,8 @@ def identity(source, binaries, env):
 
 def verified_build(root, current):
     record = json.loads((root / 'build.json').read_text())
-    if not current['clean'] or record.get('identity') != json.loads(json.dumps(current)):
-        raise RuntimeError('Build identity differs from the clean prepared checkout or environment')
+    if record.get('identity') != json.loads(json.dumps(current)):
+        raise RuntimeError('Build identity differs from the prepared source tree or environment')
     if [pathlib.Path(item['path']).name for item in record['binaries']] != current['binaries']:
         raise RuntimeError('Build binary list differs')
     for item in record['binaries']:
@@ -155,6 +180,10 @@ def cache(mode, arguments):
 def main():
     root = pathlib.Path('/workspace')
     mode, *binaries = sys.argv[1:]
+    if mode == 'apply':
+        patch, expected = binaries
+        apply_patch(root / 'source', pathlib.Path(patch), expected)
+        return
     if mode in ['cache-save', 'cache-restore']:
         cache(mode, binaries)
         return

@@ -1,30 +1,31 @@
 # Fission for agents
 
-Rent temporary compute for a specific task, prepare its environment, run the work, retrieve the result, and close the machine. Use the user's agreed requirements, budget, and completion condition. Continue through cleanup within that authorization; routine observations and already-authorized operations need no repeated approval.
+Fission turns an authorized budget, duration, source/input, workload argv, and completion condition into one managed Linux run. Use the Foundry, Reth, or Tempo harness; use Linux only when none fits. The local agent chooses and interprets the experiment. Fission owns quote selection, provisioning, preparation/readiness, durable execution, evidence, and cleanup; it never embeds an LLM on the VM.
 
-## Entry points
+## Normal workflow
 
-Use the bundled [Fission skill](skills/fission/SKILL.md) for change-validation tasks and standardized reports. Use `fission help` for syntax, `fission capabilities` for profiles, and `fission list --json` for saved machines. Agents use CLI results; bare `fission` opens the human-facing Rust TUI.
+1. Read `fission help run`, `fission budget`, and the relevant section of [docs/harnesses.md](docs/harnesses.md). Read [docs/reth.md](docs/reth.md) before synced Ethereum and [docs/rental.md](docs/rental.md) for authorization or recovery questions.
+2. Preview `fission run NAME --harness ... --budget ... --duration TOTAL --work-duration WORK --region ... -- ARGV`. Preview pays nothing. Inspect quote, resources, timing evidence, uncertainty, provider warning, and retained authorization.
+3. Repeat the identical command with `--approve` only inside existing authorization. Do not treat balance, provider credit, or a failed/closed run as permission.
+4. Observe with `fission status NAME [--wait DURATION]`. After local sleep/reboot, use `--resume`; this resumes the same recorded work and never purchases or submits it again.
+5. Use `fission stop NAME` for early cancellation, then status until cleanup is confirmed. Unknown is never confirmed destruction.
 
-Read the guide that matches the operation:
+Use `--repo` with a public GitHub URL and `--ref` with a full 40-character SHA for build mode. `--patch` is applied once before `/workspace/build`; use `--input FILE[=/workspace/path]` for regular workload files and `--artifact /workspace/file` for bounded outputs. Keep credentials out of argv, patches, inputs, logs, and reports.
 
-- [Rental](docs/rental.md): before planning or purchasing; also covers funding, jobs, exports, and ambiguous outcomes.
-- [Workload cards](docs/workloads.md): use `capabilities [ECOSYSTEM]` to choose a stable ID, then `help ID` for prerequisites, result interpretation, and limitations. Prefer prebuilt tools for contract tests and compatible caches for unchanged clients.
-- [Harnesses](docs/harnesses.md): when choosing Foundry/Reth/Tempo preparation, compiling source, or defining a recipe.
-- [Synced Reth](docs/reth.md): before sizing or starting a Reth/Lighthouse snapshot workflow.
+All manual lifecycle, jobs, transfers, reports, storage, cache, dataset, SSH, and discovery commands are secondary: `fission advanced COMMAND`. Never mutate a managed task through advanced commands while its supervisor is alive.
 
-## Operating boundaries
+## Boundaries
 
-- Pay through MPP with Tempo, using the saved plan's exact chain, token, and quote. Keep purchases and lifecycle operations within the aggregate authorization and VM ceiling. A shortlist average informs selection; it grants no spending authority.
-- Preserve the authorization ledger in `FISSION_HOME`, including closed allocations and unresolved requests. Keep wallet credentials, SSH keys, runtime state, and experiment records outside the repository.
-- Match the actual workload: source builds, development chains, and synced nodes have different requirements. Preserve hardware floors when offers are unavailable; full Reth needs at least 32 GiB RAM and 2048 GiB disk, plus manifest-derived sizing.
-- Record each purchase and job once. Observe uncertain outcomes using their existing identifiers before deciding the next action. An observer timeout can leave remote work running.
-- Judge completion from the requested workload's result. Bootstrap prepares an environment; node readiness requires fresh observations. Save required outputs, close when the task is done independently of PR state, and confirm provider termination.
+- MPP/Tempo payments only. Preserve the `FISSION_HOME` ledger, allocations, unresolved requests, receipts, and existing workspace history. Record each purchase and launch once; observe ambiguous effects rather than replaying them.
+- Total duration includes policy allowances of 30m provisioning, 10m prebuilt or 1h source build or 4h synced preparation, requested work, and 15m cleanup. These dated-evidence estimates are not guarantees. Cleanup reserves its final 2m for DELETE plus confirmation.
+- A local sleep pauses the owner, not guest deadlines or prepaid expiry. Bootstrap arms guest shutdown at the full task deadline; that is not provider deletion. Resume on wake. Observer timeout or provider 404 does not prove the VM stopped.
+- Judge the requested result, not bootstrap success. Distinguish bounded test evidence, symbolic pass, replay-confirmed counterexample, and incomplete execution. Compare equivalent baseline/candidate conditions for performance claims.
+- Close independently of PR state. Return outcome, measurements, interpretation, limitations, observed cost/uncertainty, report path, and cleanup status.
 
 ## Working on Fission
 
-During private iteration, keep fixes in source without routine version bumps, tags, or GitHub releases. Stay on major zero; use minor increments when the user requests future publication. Existing historical prereleases remain unchanged.
+Keep the Node backend authoritative for plans, payment, durable state, jobs, and lifecycle; the Rust TUI is a client and Python harnesses run on the guest. Keep one repository and the existing local runner (no Orbs). During the release pause, do not bump versions, tag, publish, rent machines, or use screens for repository validation unless explicitly authorized. Command contracts belong in code/help; docs provide workflow and interpretation without duplicating policy implementation.
 
-Consult Amp's built-in Oracle whenever guidance or planning help is needed, including consequential design decisions and unresolved technical questions. Use its advice to inform the plan, then verify and own the implementation. This does not authorize exporting private source through other services.
+Consult Amp's built-in Oracle whenever guidance or planning help is needed, including consequential design decisions and unresolved technical questions. Use its advice to inform the plan, then verify and own the implementation.
 
-The Node backend owns plans, payments, durable state, jobs, and lifecycle operations. The Rust TUI uses that backend; Python harnesses run on the guest. Keep these ownership boundaries and the single-repository layout. Keep the README brief, command syntax in `fission help`, and operational detail in the relevant guide. Changes to code-enforced spending, replay, or readiness boundaries require an explicit behavior decision.
+Stay on major zero; use minor increments only when future publication is requested. Preserve historical prereleases. Keep experiment fixtures and reports outside the product repository. Run `FISSION_TEST_DIR=/absolute/verification npm test` against the external suite, plus a locked Rust build and representative executable workflows within the current spending authority. Do not turn fixture checks into live-validation claims.

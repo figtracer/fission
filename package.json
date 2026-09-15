@@ -11,9 +11,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node --test scripts/*.test.mjs",
+    "test": "node --test \"${FISSION_TEST_DIR:?Set FISSION_TEST_DIR to the external verification directory}\"/*.test.mjs && python3 -B \"$FISSION_TEST_DIR/rust_source_test.py\"",
     "build": "cargo build --manifest-path tui/Cargo.toml --release --locked",
-    "setup": "npm run build && npm link --ignore-scripts && node src/cli.mjs skill install",
+    "setup": "npm run build && npm link --ignore-scripts && node src/cli.mjs advanced skill install",
     "package": "npm run build && node scripts/package.mjs"
   }
 }

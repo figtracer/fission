@@ -1,17 +1,7 @@
-Pruned full Reth snapshots now verify execution genesis through local IPC network identity. The controller records its IPC path, and readiness retains mainnet identity, canonical payload, peer, sync, and head freshness checks. RPC failures include their parameters and server error.
+# Unreleased managed redesign
 
-Storage output names Fission's own storage fee explicitly (`fissionStorageCharge`, replacing `recurringStorageCharge`). User-mounted storage retains its own billing.
+The normal interface is now the Rust dashboard plus `run`, `status`, `stop`, `help`, and `budget`. Foundry, Reth, and Tempo are cohesive harnesses behind one durable managed task; plain Linux is the fallback. Manual lifecycle, jobs, transfers, reports, caches, datasets, SSH, and discovery moved under `fission advanced` for recovery.
 
-Mouse and keyboard tab navigation now leaves the Storage and Help views consistently.
+Managed runs preview without payment, require explicit `--approve`, preserve retained authorization/history, supervise locally across terminal disconnects, collect bounded evidence, and reserve cleanup time for deletion plus confirmation. Source build mode requires a public repository and full commit SHA; optional patches are applied once before build. Synced Reth supports Ethereum only and requires a canonical full planner/manifest plus independently verified checkpoint.
 
-The selected local storage directory now reaches managed tmux sessions even when a tmux server is already running.
-
-Keep verified build artifacts and prepared Reth execution data in a local directory or mounted drive. The Rust TUI's Storage view shows the location and available space. Dataset collection resumes verified chunks; restored datasets use the pinned writer and a fresh node startup.
-
-Named readiness checks distinguish installed tools, verified builds, and synced nodes. Portable experiment records retain the recipe, source, workload, environment, measurements, logs, receipts, and cleanup status. Reruns use a fresh plan and budget.
-
-Concurrent VM requests serialize budget reservations. Free SSH transfers retain their request journals without repeatedly rewriting the monetary ledger. SSH opens from verified, unexpired access details, keeping tmux windows independent of job locks.
-
-Download the native package and verify its matching SHA-256 checksum. Install with `npm install -g ./fission-*.tgz --ignore-scripts`, then install the bundled agent skill. Use `fission help` for commands.
-
-Requires Node ≥22.13, SSH, and a configured Tempo CLI wallet. Linux packages require x86-64 and glibc ≥2.35. Repository access is required to download these private releases.
+No release is being produced. Version bumps, tags, and publication remain paused; local development packaging and installation use reviewed source.

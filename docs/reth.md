@@ -1,45 +1,39 @@
-# Synced Reth
+# Synced Ethereum with Reth
 
-Use this guide before planning a full Reth/Lighthouse workload. `reth-synced` prepares Reth 2.5.2, Lighthouse 8.2.2, and `/workspace/ethereum` on a Linux x86 VM with systemd. Its profile retains at least 8 vCPU, 32 GiB RAM, and 2048 GiB disk. Import and node startup are separate jobs after bootstrap.
+`reth --mode synced` is one managed Ethereum mainnet run using pinned Reth 2.5.2 and Lighthouse 8.2.2. It is not a normal sequence of manual download/start/check jobs. Base and BSC variants are not implemented.
 
-## Size before quoting
+## Supply canonical inputs
 
-Select an exact manifest from [Reth snapshots](https://snapshots.reth.rs). Headline sizes describe compressed downloads. Ask the pinned Reth importer for its canonical selection:
-
-```sh
-reth download --chain mainnet --manifest-path FILE --full --print-plan-json --quiet
-```
-
-Record the binary, manifest digest, preset, and invocation outside the repo; the output omits the preset name. Add `totalDownloadSize` and `totalOutputSize`, plus an explicit allowance for consensus, growth, builds, OS/filesystem, and extraction. Round upward to GiB and pass `--disk GiB` to discovery and planning. This conservative coexistence envelope supplements the profile floor. Archive needs its own sizing; minimal is a different workload requiring an explicit choice.
-
-Budget lease time for preparation, transfer, extraction, index reconstruction, syncing, the requested work, and export. The full preset can omit indexes that Reth rebuilds on first startup; completed extraction does not establish node readiness. Verify actual guest resources and free space before import.
-
-## Import
-
-Upload the exact manifest, then run this command in a bounded Fission job:
+Before previewing, obtain an exact manifest from [Reth snapshots](https://snapshots.reth.rs) and produce the pinned importer's canonical full planner JSON:
 
 ```sh
-/workspace/ethereum download --manifest /workspace/manifest.json --sha256 DIGEST --extra-disk-gib ALLOWANCE
+reth download --chain mainnet --manifest-path MANIFEST.json --full --print-plan-json --quiet > PLAN.json
 ```
 
-The controller re-runs the pinned full planner and checks actual free space. It records the attempt before transfer and publishes `/workspace/ethereum-data/snapshot.json` after successful import. Other jobs can consume disk, so preserve capacity during import. Failed staging remains recorded; inspect it before manual recovery rather than automatically repeating the download.
+Retain the planner binary identity, invocation, preset, manifest digest, archive list, block, and total compressed/output sizes. Fission requires schema version 1, chain ID 1, a matching manifest block, complete archive sizes, and exact totals. It computes a conservative coexistence disk floor from download + output + positive `--extra-disk-gib`; headline compressed size is insufficient.
 
-## Start and observe
-
-Select a recent mainnet checkpoint and independently verify its block root and epoch, then run:
+Select a recent HTTPS consensus checkpoint from a source you trust and independently verify its 32-byte block root and epoch. Fission validates the syntax and HTTPS transport, not the source's trustworthiness.
 
 ```sh
-/workspace/ethereum start --checkpoint-url TRUSTED_HTTPS_URL --checkpoint BLOCK_ROOT:EPOCH --max-head-age SECONDS
+fission run mainnet-check --harness reth --mode synced --chain ethereum \
+  --manifest MANIFEST.json --snapshot-plan PLAN.json \
+  --checkpoint-url https://TRUSTED_SOURCE/ --checkpoint 0xROOT:EPOCH \
+  --max-head-age SECONDS --extra-disk-gib GiB --budget AMOUNT \
+  --duration TOTAL --work-duration WORK --region REGION -- ARGV
 ```
 
-The controller records intent before starting owned systemd units. Readiness requires two fresh observations with an advancing, canonical consensus execution payload, matching genesis identities (execution network identity comes from local IPC so pruned block zero is supported), connected peers, and non-optimistic online execution. Treat readiness as a timestamped observation. Peer counts alone do not establish inbound reachability or historical consensus backfill.
+Run first without `--approve`. Inspect computed disk/resources, quote, 4h preparation allowance, evidence, and uncertainty. Then repeat unchanged with `--approve` if authorized.
 
-`status --max-head-age SECONDS` checks the pair; `wait` with the same flag observes until ready. A startup/wait timeout stops the observer while services remain bounded by the lease. `stop` stops and verifies both owned service cgroups. `restart` takes the same checkpoint/readiness flags and stops the previous pair before recording a new invocation.
+## What readiness means
 
-Preparation adds UFW allowances for execution TCP/UDP 30303 and consensus TCP/UDP 9000 plus UDP 9001, preserving existing firewall settings. Verify provider-level filtering separately. RPC, Engine, and consensus APIs bind to loopback; JWT permissions are 0600. Units use `Restart=no`; this workflow needs no validator keys or staking.
+Import completion is not readiness: the full preset may require index reconstruction and catch-up. Managed readiness requires healthy owned processes, matching Ethereum genesis identities, connected peers, non-optimistic online consensus, and two fresh observations with advancing canonical execution payloads inside the requested head-age bound. Peer count alone does not prove inbound reachability or historical consensus backfill.
 
-## Candidate and outputs
+The guest binds RPC, Engine, and consensus APIs to loopback, protects JWT material, and opens the execution/consensus peer ports in UFW; provider filtering remains separate. No validator keys or staking are involved.
 
-Pass `--reth /workspace/CANDIDATE` to use an explicitly uploaded or built executable. The controller copies it to a digest-addressed path while retaining the pinned importer. Assess database compatibility before startup; a candidate can migrate data, so rollback is an explicit recovery decision. Budget source/build space separately.
+Evidence from one September 14, 2026 Amsterdam run (16 vCPU, 128 GiB RAM, 3.2 TB nominal disk; 726,194,576,598 downloaded bytes; 962,683,657,146 output bytes) measured about 59m import, 40m28s index reconstruction, 2h41m from import start to readiness, and 3h39m from rental request to paired readiness. Network throughput was not measured; diagnostics/migration were included. This one sample is neither a guarantee nor a bound for another machine, snapshot, or date. A warm restart passed, while a later observation lost `consensusSynced`; continuous readiness is unproven.
 
-Automatic close exports contain tool provenance and bootstrap output. Stop writers, then download small snapshot/start reports and bounded journal excerpts explicitly. Keep live logs and databases on the guest. Complete the [rental cleanup](rental.md#run-and-collect) after collecting the task's result.
+## Candidate and retained data
+
+A synced workload may consume an explicitly supplied/built candidate, but database compatibility and migration risk remain experiment decisions. Preserve manifest/client pins, checkpoint provenance, readiness observations, command output, and small reports. The managed supervisor stops work, gathers bounded evidence, and tears down; do not declare cleanup from a missing response.
+
+Dataset inspect/save/collect/restore and direct guest controller operations are advanced recovery only (`fission advanced dataset ...`, `fission advanced exec ...`). Stop writers, verify available local/staging capacity and remaining lease, and retain hashes before capture. Restore still requires catch-up and fresh readiness. Full cross-rental roundtrip and compatible prebuilt indexes remain unvalidated.

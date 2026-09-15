@@ -1,9 +1,10 @@
 // Private TUI adapter: financial calculations and mutations stay in the CLI backend.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { root, list } from "./state.mjs";
+import { root, list, load } from "./state.mjs";
 import { spending } from "./payments.mjs";
 import { close, refresh, operationCap } from "./workspace.mjs";
+import { taskStatus, stopTask, resumeTask } from "./tasks.mjs";
 import { units, amount } from "./budget.mjs";
 import { providerWarning } from "./provider.mjs";
 import { storage } from "./storage.mjs";
@@ -21,9 +22,17 @@ async function main() {
   let message = "";
   let available = action === "snapshot" ? await availableMachines({ cached: true }) : undefined;
   if (action === "close") {
-    await mkdir(join(root, "exports"), { recursive: true, mode: 0o700 });
-    const result = await close(name, { output: join(root, "exports", `${name}-${Date.now()}`) });
-    message = `${name}: ${result.phase}${result.exportedTo ? ". Saved " + result.exportedTo : ""}`;
+    if ((await load(name)).task) {
+      await stopTask(name);
+      message = `${name}: stop requested; cleanup continues in the supervisor.`;
+    } else {
+      await mkdir(join(root, "exports"), { recursive: true, mode: 0o700 });
+      const result = await close(name, { output: join(root, "exports", `${name}-${Date.now()}`) });
+      message = `${name}: ${result.phase}${result.exportedTo ? ". Saved " + result.exportedTo : ""}`;
+    }
+  } else if (action === "resume") {
+    await resumeTask(name);
+    message = `${name}: same task resumed; no new purchase.`;
   } else if (action === "refresh") {
     await refresh(name);
     message = "Provider status updated.";
@@ -32,7 +41,8 @@ async function main() {
   else if (!["snapshot", "verify"].includes(action)) throw new Error("Unknown TUI operation.");
   const states = await list(), report = await spending({ refresh: action === "verify" });
   if (action === "verify") message = report.refreshError || "Payment receipts checked; missing amounts remain unknown.";
-  const machines = states.map((state) => {
+  const machines = await Promise.all(states.map(async (state) => {
+    const task = state.task ? await taskStatus(state.name) : null;
     const transactions = report.transactions.filter((item) => item.workspaces.includes(state.name));
     const paid = report.unknownWorkspaces?.includes(state.name) || !transactions.length ||
       transactions.some((item) => item.paid === null || item.workspaces.length !== 1) ? null :
@@ -42,18 +52,19 @@ async function main() {
     const unresolved = state.phase.endsWith("_unknown");
     return {
       name: state.name, project: state.project || state.source?.url?.split("/").at(-1)?.replace(/\.git$/, "") || state.recipe.name.replace(/-(source|synced|node)$/, ""),
-      phase: !finished && state.resizePending ? "resizing" : state.phase, provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
+      phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
+      managed: Boolean(task), taskDetail: task ? `${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
       active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
       ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
-      requested: state.requestedAt || "", expiry: Math.floor(Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000) || null,
-      estimated: !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
+      requested: state.requestedAt || "", expiry: Math.floor((state.task?.deadline || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,
+      estimated: !task && !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
       capacity: capacity?.cpu ? `${capacity.cpu} vCPU / ${capacity.memoryGiB} GiB RAM / ${Math.floor(capacity.diskGiB)} GiB disk` : "unreserved sandbox",
-      started: date(state.requestedAt), ended: date(finished ? state.closedAt : state.providerExpiresAt || state.deadlineEstimate),
-      cap: money(state.totalCap), quote: money(state.creationQuote), exported: state.exportedTo || "",
+      started: date(state.requestedAt), ended: date(finished ? state.closedAt : task?.deadline || state.providerExpiresAt || state.deadlineEstimate),
+      cap: money(state.totalCap), quote: money(state.creationQuote), exported: task?.report || state.exportedTo || "",
       checkCap: state.provider === "compute-mpp" ? "0" : operationCap,
       transactions: transactions.map((item) => ({ paid: money(item.paid), operation: item.operation || "unknown", hash: item.hash })),
     };
-  });
+  }));
   console.log(JSON.stringify({ machines, message, available, storage: await storage().catch((error) => ({ directory: error.message, availableBytes: null })),
     spending: `paid ${money(report.paid)} ${report.currency}${report.pendingVerification || report.unresolvedRequests || report.unreadableRecords ? " + unknown" : ""}    allocated ${money(report.budget?.allocated)} / ${money(report.budget?.limit)}`,
   }));

@@ -96,6 +96,10 @@ struct Machine {
     quote: String,
     exported: String,
     check_cap: String,
+    #[serde(default)]
+    managed: bool,
+    #[serde(default)]
+    task_detail: String,
     transactions: Vec<Transaction>,
 }
 
@@ -333,11 +337,7 @@ fn render(
             &[
                 ("fission", KeyCode::Null),
                 (
-                    if view.available {
-                        " My machines "
-                    } else {
-                        "[My machines]"
-                    },
+                    if view.available { " Tasks " } else { "[Tasks]" },
                     KeyCode::Char('1'),
                 ),
                 (
@@ -392,7 +392,9 @@ fn render(
                 ("Click to open; wheel moves one row.", 2),
                 ("f filter   s sort   r refresh", 0),
                 ("Available: b prices   [ / ] region", 0),
-                ("Machine: Enter SSH   p check   x close", 0),
+                ("Task: u resume   x stop   p provider check", 0),
+                ("Enter SSH (advanced); q leaves task running", 0),
+                ("New task: fission run (see fission help run)", 0),
                 ("v verify payments   ? close help", 0),
             ] {
                 lines.push((text.into(), style));
@@ -499,7 +501,7 @@ fn render(
         } else if !view.detail {
             lines.push((
                 format!(
-                    "My machines   {} active   {} saved   {} unresolved",
+                    "Tasks   {} active   {} saved   {} unresolved",
                     data.machines.iter().filter(|m| m.active).count(),
                     data.machines.len(),
                     data.machines.iter().filter(|m| m.unresolved).count()
@@ -522,7 +524,7 @@ fn render(
                 )
             };
             lines.push((
-                format!("  {}", row("machine", "state", "time left", "paid")),
+                format!("  {}", row("task", "state", "time left", "paid")),
                 2,
             ));
             for (i, item) in grouped(data, view)
@@ -565,7 +567,7 @@ fn render(
                 ));
             }
             if length == 0 {
-                lines.push(("No machines here yet.".into(), 0));
+                lines.push(("No tasks yet. Start with fission help run.".into(), 0));
             }
         } else if let Some(m) = selected(data, view) {
             lines.push((m.name.clone(), 1));
@@ -581,11 +583,18 @@ fn render(
             ));
             lines.push((String::new(), 0));
             lines.push((m.capacity.clone(), 0));
+            lines.push((m.task_detail.clone(), 0));
             lines.push((format!("Started  {}", m.started), 0));
             lines.push((
                 format!(
                     "{}  {}",
-                    if m.finished { "Closed " } else { "Expires" },
+                    if m.finished {
+                        "Closed "
+                    } else if m.managed {
+                        "Deadline"
+                    } else {
+                        "Expires"
+                    },
                     m.ended
                 ),
                 0,
@@ -654,7 +663,7 @@ fn render(
                 &mut hits,
                 &[
                     ("[n Cancel]", KeyCode::Char('n')),
-                    ("[y Save and close]", KeyCode::Char('y')),
+                    ("[y Stop and clean up]", KeyCode::Char('y')),
                 ],
             );
         } else if view.help || view.storage {
@@ -679,7 +688,8 @@ fn render(
                         ("[h Back]", KeyCode::Esc),
                         ("[SSH]", KeyCode::Enter),
                         ("[p Check]", KeyCode::Char('p')),
-                        ("[x Close]", KeyCode::Char('x')),
+                        ("[u Resume]", KeyCode::Char('u')),
+                        ("[x Stop]", KeyCode::Char('x')),
                     ],
                 );
             }
@@ -801,7 +811,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut data = Snapshot::default();
     let mut view = View {
         sort: 1,
-        message: "Loading local machines...".into(),
+        message: "Loading local tasks...".into(),
         ..View::default()
     };
     let mut pending = Some(fetch(node.clone(), bridge.clone(), "snapshot", ""));
@@ -1158,6 +1168,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('r') => action = Some(("snapshot", String::new())),
                     KeyCode::Char('v') => action = Some(("verify", String::new())),
+                    KeyCode::Char('u') if view.detail => {
+                        if let Some(m) = selected.filter(|m| m.managed && !m.finished) {
+                            action = Some(("resume", m.name.clone()));
+                        }
+                    }
                     KeyCode::Char('p') if view.detail => {
                         if let Some(m) = selected.filter(|m| !m.finished) {
                             view.message =
@@ -1194,7 +1209,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 drop(screen.take());
                                 let result = (|| -> io::Result<_> {
                                     let mut command = Command::new(&node);
-                                    command.arg(&cli).args(["ssh", &m.name]);
+                                    command.arg(&cli).args(["advanced", "ssh", &m.name]);
                                     if env::var_os("FISSION_TMUX_SESSION").is_some() {
                                         command.arg("--tmux");
                                     }
@@ -1231,7 +1246,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some((action, name)) = action {
                 if action != "refresh" {
                     view.message = match action {
-                        "close" => format!("Saving and closing {name}..."),
+                        "close" => format!("Requesting cleanup for {name}..."),
+                        "resume" => format!("Resuming {name}..."),
                         "verify" => "Verifying payment receipts...".into(),
                         "catalog" => "Loading available machines...".into(),
                         "quote" => "Fetching a fresh quote...".into(),

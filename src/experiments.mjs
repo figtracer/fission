@@ -6,6 +6,7 @@ import { validateRecipe } from "./workspace.mjs";
 
 export const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export async function fingerprint(path) {
+  if (!(await stat(path)).isFile()) throw new Error("Expected a regular input or evidence file.");
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return { bytes: (await stat(path)).size, sha256: hash.digest("hex") };

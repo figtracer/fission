@@ -105,6 +105,8 @@ def download(args):
     plan = json.loads(command([*argv, '--print-plan-json', '--quiet']))
     if plan.get('schemaVersion') != 1 or plan.get('chainId') != 1 or plan.get('block') != manifest.get('block') or not plan.get('archives'):
         raise RuntimeError('Invalid canonical snapshot plan')
+    if args.plan and read(pathlib.Path(args.plan)) != plan:
+        raise RuntimeError('Canonical full plan differs from the pre-quote sizing input; no snapshot download started')
     urls = [archive['url'] for archive in plan['archives']]
     if len(set(urls)) != len(urls) or any(not url.startswith(manifest['base_url'].rstrip('/') + '/') for url in urls):
         raise RuntimeError('Snapshot archives must be unique and remain under the official manifest base URL')
@@ -252,6 +254,7 @@ def main():
     get = actions.add_parser('download')
     get.add_argument('--manifest', required=True)
     get.add_argument('--sha256', required=True)
+    get.add_argument('--plan', help='Managed pre-quote planner JSON; must match the pinned importer')
     get.add_argument('--extra-disk-gib', required=True, type=int)
     for name in ['start', 'restart', 'status', 'wait']:
         sub = actions.add_parser(name)

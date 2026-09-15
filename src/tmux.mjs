@@ -21,7 +21,7 @@ async function window(name, select = false) {
     let id = windows.split("\n").map(line => line.split(" ")).find(([, machine]) => machine === name)?.[0];
     if (!id) {
       id = await tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-t", session, "-n", name,
-        process.execPath, cli, "ssh", name);
+        process.execPath, cli, "advanced", "ssh", name);
       await tmux("set-option", "-w", "-t", id, "@fission-machine", name);
       await tmux("set-option", "-w", "-t", id, "remain-on-exit", "off");
     }
