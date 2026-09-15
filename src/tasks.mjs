@@ -153,7 +153,14 @@ async function finish(name, jobs) {
   for (const remote of files) {
     if (state.task.exports.some((item) => item.remote === remote)) continue;
     // Export timeout shares one cutoff; teardown retains its full request allowance.
-    if (Date.now() >= transfer.deadline) break;
+    if (Date.now() >= transfer.deadline) {
+      const error = `Evidence cutoff ${new Date(transfer.deadline).toISOString()} passed before transfer; not attempted.`;
+      state = await update(name, (task) => {
+        for (const skipped of files) if (!task.exports.some((item) => item.remote === skipped))
+          task.exports.push({ remote: skipped, phase: "not_collected", error });
+      });
+      break;
+    }
     const local = join(destination, `${state.task.exports.length}-${basename(remote)}`);
     state = await update(name, (task) => { task.exports.push({ remote, local, phase: "collecting" }); });
     try {

@@ -18,7 +18,7 @@ TOTAL reserves 30m provisioning, harness preparation, WORK, and 15m cleanup. The
 
 Before tools start, bootstrap arms a guest systemd timer to initiate poweroff at the full task deadline if the local owner is unavailable. This is a safety net for a trusted root workload, not a sandbox boundary or exact shutdown-time guarantee. A guest reboot or root command can remove the transient timer. Guest poweroff is not provider destruction: the local owner still requests and confirms deletion on resume. The timer's live firing and gateway behavior after poweroff remain unvalidated.
 
-Final status/report should show outcome, jobs, evidence, observed spending or uncertainty, report path, and cleanup confirmation. A passing process does not by itself establish the experiment's claim.
+Final status/report should show outcome, jobs, evidence, observed spending or uncertainty, report path, and cleanup confirmation. A passing process does not by itself establish the experiment's claim. Resuming after the collection cutoff can lose guest outputs: each unattempted export is recorded as `not_collected` with its cutoff reason, independently of the job outcome. Fission does not extend the rental or invent a local file to recover it.
 
 ## Recovery
 

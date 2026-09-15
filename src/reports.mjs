@@ -123,6 +123,7 @@ export async function report(name, id, options = {}) {
     ...(measurements.length ? ["## Measurements", "", code(measurements), ""] : []),
     "## Evidence", "", "- [Structured record](run.json)",
     ...evidence.map((item) => `- [${cell(item.remote)}](${item.path}): ${item.bytes} bytes; SHA-256 \`${item.sha256}\`.`),
+    ...(state.task?.exports || []).filter((item) => item.phase !== "collected").map((item) => `- ${cell(item.remote)}: ${cell(item.phase)}; ${cell(item.error)}`),
     ...(replayable ? ["- [Portable experiment](experiment.json): review its commands, then request a fresh plan and budget."] : []),
     ...(value.log ? [`- [Job output](output.log): ${value.log.bytes} bytes; SHA-256 \`${value.log.sha256}\`.`] : []),
     ...transactions.map((transaction) => `- [Payment receipt](${transaction.explorer}): ${transaction.paid ?? "unverified"} USDC.e${transaction.workspaces.length > 1 ? " (shared transaction)" : ""}.`),
