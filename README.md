@@ -45,7 +45,9 @@ fission status check-a --wait 10m
 
 `status` returns outcome, jobs, observed cost, evidence paths and hashes, report path, and cleanup state. After local sleep, reboot, or owner interruption, `fission status NAME --resume` resumes observation of the same recorded purchase and submission; it never buys a replacement. Keep using status until cleanup is confirmed—timeout, provider `404`, or guest shutdown alone is not proof of destruction.
 
-Bare `fission` opens the Rust task dashboard. `run`, `status`, `stop`, `help`, and `budget` are the normal interface. Manual lifecycle, jobs, transfers, storage, cache, dataset, SSH, and recovery commands are intentionally secondary under `fission advanced`.
+Bare `fission` opens the Rust task dashboard. Click a task to inspect it. Inside `fission advanced tmux`, **SSH terminal** opens a small popup while the dashboard keeps refreshing; a plain dashboard uses fullscreen SSH and resumes refresh after the shell exits. Stopping requires a second confirmation: provider cleanup may lose guest files that were not collected, but local task/experiment folders, collected evidence and reports, and caches already saved by successful builds remain. Other experiment machines keep running.
+
+`run`, `status`, `stop`, `help`, and `budget` are the normal interface. Manual lifecycle, jobs, transfers, storage, cache, dataset, SSH, and recovery commands are intentionally secondary under `fission advanced`.
 
 ## Test or build source
 

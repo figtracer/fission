@@ -35,6 +35,27 @@ export async function selectMachine(name) {
   await window(name, true);
 }
 
+export async function popupMachine(name) {
+  const state = await load(name);
+  if (!ready(state)) throw new Error("SSH opens when the full VM is ready.");
+  if (process.env.FISSION_TMUX_SESSION !== session || !process.env.TMUX_PANE)
+    throw new Error("Open the popup from this Fission tmux dashboard.");
+  if (await tmux("show-option", "-qv", "-t", `=${session}`, "@fission-home") !== root)
+    throw new Error("The tmux session belongs to a different Fission state directory.");
+  const pane = process.env.TMUX_PANE;
+  if (await tmux("display-message", "-p", "-t", pane, "#{session_name}") !== session)
+    throw new Error("The dashboard pane is no longer in its owned Fission session.");
+  const clients = (await tmux("list-clients", "-t", `=${session}`, "-F", "#{client_name}\t#{pane_id}"))
+    .split("\n").filter(Boolean).map(line => line.split("\t"))
+    .filter(([, visiblePane]) => visiblePane === pane);
+  if (clients.length !== 1)
+    throw new Error("Show this dashboard in exactly one tmux client before opening its popup.");
+  await tmux("display-popup", "-E", "-w", "80%", "-h", "70%", "-T", name,
+    "-c", clients[0][0], "-t", pane,
+    "-e", `FISSION_HOME=${root}`, "-e", `FISSION_STORAGE_DIR=${storageRoot()}`,
+    process.execPath, cli, "advanced", "ssh", name);
+}
+
 export async function openTmux() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Open fission tmux in an interactive terminal.");
   try { await tmux("-V"); } catch { throw new Error("Install tmux, then run fission tmux."); }
@@ -94,5 +115,10 @@ async function serve() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "serve")
-  serve().then(code => { process.exitCode = code; }).catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const action = process.argv[2];
+  const operation = action === "serve" ? serve().then(code => { process.exitCode = code; }) :
+    action === "popup" && process.argv.length === 4 ? popupMachine(process.argv[3]).then(() => console.log('{"status":0}')) :
+      Promise.reject(new Error("Unknown tmux operation."));
+  operation.catch(error => { console.error(error.message); process.exitCode = 1; });
+}
