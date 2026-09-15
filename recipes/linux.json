@@ -2,5 +2,11 @@
   "name": "linux",
   "description": "A temporary Linux shell with Python and an empty workspace.",
   "prepare": [["sh", "-c", "mkdir -p /workspace && python3 --version && uname -s"]],
+  "checks": [{
+    "name": "linux-python",
+    "scope": "tools",
+    "argv": ["python3", "-c", "import json,platform; print(json.dumps({'ready': platform.system() == 'Linux' and platform.machine() == 'x86_64', 'system': platform.system(), 'architecture': platform.machine(), 'python': platform.python_version()}))"],
+    "result": "json"
+  }],
   "artifacts": []
 }
