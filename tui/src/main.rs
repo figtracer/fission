@@ -128,6 +128,7 @@ struct View {
     g_pending: bool,
     confirm: Option<String>,
     message: String,
+    message_sticky: bool,
     available: bool,
     all_prices: bool,
     region: usize,
@@ -148,6 +149,7 @@ impl Default for View {
             g_pending: false,
             confirm: None,
             message: String::new(),
+            message_sticky: false,
             available: false,
             all_prices: false,
             region: 0,
@@ -321,6 +323,49 @@ fn remaining(m: &Machine) -> String {
     )
 }
 
+fn snapshot_cue(previous: &Snapshot, next: &Snapshot) -> Option<String> {
+    let previous: BTreeMap<_, _> = previous
+        .machines
+        .iter()
+        .map(|machine| (machine.name.as_str(), machine))
+        .collect();
+    let mut ready = Vec::new();
+    let mut finished = Vec::new();
+    let mut not_rented = Vec::new();
+    for machine in &next.machines {
+        let Some(before) = previous.get(machine.name.as_str()) else {
+            continue;
+        };
+        if !machine.finished && !before.ssh && machine.ssh {
+            ready.push(machine.name.as_str());
+        }
+        if !before.finished && machine.finished {
+            if ["not_submitted", "not_purchased"].contains(&machine.phase.as_str()) {
+                not_rented.push(machine.name.as_str());
+            } else {
+                finished.push(format!("{} ({})", machine.name, machine.phase));
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if !ready.is_empty() {
+        parts.push(format!(
+            "Ready: {}. Open SSH for a terminal.",
+            ready.join(", ")
+        ));
+    }
+    if !finished.is_empty() {
+        parts.push(format!(
+            "Finished: {}. Review cleanup details.",
+            finished.join(", ")
+        ));
+    }
+    if !not_rented.is_empty() {
+        parts.push(format!("Not rented: {}.", not_rented.join(", ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 // External strings are data, never terminal controls or bidi instructions.
 fn clip(text: &str, width: usize) -> String {
     let safe: Vec<_> = text
@@ -452,7 +497,19 @@ fn render(
         if view.index >= view.top + count {
             view.top = view.index + 1 - count;
         }
-        if view.storage {
+        if let Some(name) = &view.confirm {
+            lines.push(("Stop and destroy this machine?".into(), 1));
+            lines.push((name.clone(), 3));
+            lines.push((
+                "Only this machine; experiment peers keep running.".into(),
+                0,
+            ));
+            lines.push(("Kept: task/experiment folders, evidence/reports,".into(), 1));
+            lines.push(("and caches already saved by successful builds.".into(), 0));
+            lines.push(("May lose guest files not yet collected.".into(), 1));
+            lines.push(("Stopping does not guarantee a new cache save.".into(), 0));
+            lines.push(("Cleanup still requires destruction confirmation.".into(), 2));
+        } else if view.storage {
             lines.push(("Local storage".into(), 1));
             if let Some(storage) = &data.storage {
                 lines.push((storage.directory.clone(), 0));
@@ -476,11 +533,12 @@ fn render(
                 ("j/k move   h/Esc back   l/Enter open", 0),
                 ("gg/G first/last   Ctrl-u/Ctrl-d half page", 0),
                 ("Tab or 1/2 switch tabs   q quit", 0),
-                ("Click to open; wheel moves one row.", 2),
+                ("Click task to inspect; click SSH for a terminal.", 2),
                 ("f filter   s sort   r refresh", 0),
                 ("Available: b prices   [ / ] region", 0),
                 ("Task: u resume   x stop   p provider check", 0),
-                ("Enter SSH (advanced); q leaves task running", 0),
+                ("tmux: SSH opens a popup; otherwise it is fullscreen.", 0),
+                ("Fullscreen SSH pauses dashboard refresh until exit.", 0),
                 ("New task: fission run (see fission help run)", 0),
                 ("v verify payments   ? close help", 0),
             ] {
@@ -491,11 +549,12 @@ fn render(
                 let available = offers(data, view);
                 if view.detail {
                     if let Some(m) = available.get(view.index) {
-                        lines.push((
-                            format!("{}{}", if m.provider_warning { "! " } else { "" }, m.id),
-                            1,
-                        ));
+                        lines.push((m.id.clone(), 1));
                         lines.push((format!("{}   Linux x86_64", m.provider), 2));
+                        if m.provider_warning {
+                            lines
+                                .push(("Provider history warning: verify availability.".into(), 2));
+                        }
                         lines.push((String::new(), 0));
                         lines.push((
                             format!(
@@ -550,14 +609,7 @@ fn render(
                             format!(
                                 "{} {:<nw$} {:>4} {:>5} {:>7} {:>8}",
                                 if i == view.index { ">" } else { " " },
-                                clip(
-                                    &format!(
-                                        "{}{}",
-                                        if m.provider_warning { "! " } else { "" },
-                                        m.id
-                                    ),
-                                    nw
-                                ),
+                                clip(&m.id, nw),
                                 m.cpu,
                                 m.memory,
                                 m.disk,
@@ -645,8 +697,7 @@ fn render(
                             if i == view.index { ">" } else { " " },
                             row(
                                 &format!(
-                                    "  {}{}{}",
-                                    if m.provider_warning { "! " } else { "" },
+                                    "  {}{}",
                                     m.experiment.as_ref().map_or(
                                         String::new(),
                                         |experiment| format!("[{}] ", experiment.role)
@@ -676,15 +727,12 @@ fn render(
         } else if let Some(m) = selected(data, view) {
             lines.push((m.name.clone(), 1));
             lines.push((
-                format!(
-                    "{}   {}   {}{}",
-                    m.phase,
-                    remaining(m),
-                    m.provider,
-                    if m.provider_warning { " !" } else { "" }
-                ),
+                format!("{}   {}   {}", m.phase, remaining(m), m.provider),
                 2,
             ));
+            if m.provider_warning {
+                lines.push(("Provider history warning: verify availability.".into(), 2));
+            }
             lines.push((String::new(), 0));
             lines.push((m.capacity.clone(), 0));
             if let Some(experiment) = &m.experiment {
@@ -719,7 +767,9 @@ fn render(
             lines.push((String::new(), 0));
             lines.push(("Transactions   USDC.e".into(), 1));
             let count = height
-                .saturating_sub(17 + usize::from(m.experiment.is_some()))
+                .saturating_sub(
+                    17 + usize::from(m.experiment.is_some()) + usize::from(m.provider_warning),
+                )
                 .max(1);
             for tx in m.transactions.iter().skip(view.offset).take(count) {
                 lines.push((
@@ -774,8 +824,8 @@ fn render(
                 &mut lines,
                 &mut hits,
                 &[
-                    ("[n Cancel]", KeyCode::Char('n')),
-                    ("[y Stop and clean up]", KeyCode::Char('y')),
+                    ("[n Keep running]", KeyCode::Char('n')),
+                    ("[y Stop and destroy]", KeyCode::Char('y')),
                 ],
             );
         } else if view.help || view.storage {
@@ -793,12 +843,17 @@ fn render(
                     ],
                 );
             } else {
+                let ssh = if selected(data, view).is_some_and(|machine| machine.ssh) {
+                    "[SSH terminal]"
+                } else {
+                    "[SSH unavailable]"
+                };
                 buttons(
                     &mut lines,
                     &mut hits,
                     &[
                         ("[h Back]", KeyCode::Esc),
-                        ("[SSH]", KeyCode::Enter),
+                        (ssh, KeyCode::Enter),
                         ("[p Check]", KeyCode::Char('p')),
                         ("[u Resume]", KeyCode::Char('u')),
                         ("[x Stop]", KeyCode::Char('x')),
@@ -863,6 +918,10 @@ struct Worker {
     _input: Option<ChildStdin>,
 }
 
+struct PopupWorker {
+    receiver: mpsc::Receiver<Result<(), String>>,
+}
+
 fn fetch(node: String, bridge: String, action: &str, name: &str) -> Worker {
     let (tx, receiver) = mpsc::channel();
     let mut command = Command::new(node);
@@ -905,6 +964,31 @@ fn fetch(node: String, bridge: String, action: &str, name: &str) -> Worker {
     }
 }
 
+fn open_popup(node: String, helper: String, name: String) -> PopupWorker {
+    let (tx, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = Command::new(node)
+            .args([helper, "popup".into(), name])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| error.to_string())
+            .and_then(|output| {
+                if output.status.success() && output.stdout == b"{\"status\":0}\n" {
+                    Ok(())
+                } else {
+                    let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    Err(if error.is_empty() {
+                        "The tmux popup helper did not confirm startup.".into()
+                    } else {
+                        error
+                    })
+                }
+            });
+        let _ = tx.send(result);
+    });
+    PopupWorker { receiver }
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !io::stdin().is_terminal() || !stdout().is_terminal() {
         return Err(
@@ -915,6 +999,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let node = args.next().ok_or("Launch with fission.")?;
     let bridge = args.next().ok_or("Launch with fission.")?;
     let cli = PathBuf::from(&bridge).with_file_name("cli.mjs");
+    let tmux_helper = PathBuf::from(&bridge).with_file_name("tmux.mjs");
     let interrupted = Arc::new(AtomicBool::new(false));
     let terminated = Arc::new(AtomicBool::new(false));
     flag::register(SIGINT, interrupted.clone())?;
@@ -927,6 +1012,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ..View::default()
     };
     let mut pending = Some(fetch(node.clone(), bridge.clone(), "snapshot", ""));
+    let mut popup_pending: Option<PopupWorker> = None;
     let mut catalog_pending = Some(fetch(node.clone(), bridge.clone(), "catalog", ""));
     let mut catalog_error = String::new();
     let mut last_load = Instant::now();
@@ -940,7 +1026,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let previous_selection = selection(&data, &view);
                     match result {
                         Ok(mut new) => {
-                            view.message = new.message.clone();
+                            let cue = (!data.machines.is_empty())
+                                .then(|| snapshot_cue(&data, &new))
+                                .flatten();
+                            let operation_message = new.message.clone();
                             if new.available.as_ref().is_none_or(|incoming| {
                                 data.available
                                     .as_ref()
@@ -959,8 +1048,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         .map_or(0, |m| m.transactions.len().saturating_sub(1)),
                                 );
                             }
+                            if !operation_message.is_empty() {
+                                view.message = operation_message;
+                                view.message_sticky = true;
+                            } else if let Some(cue) = cue {
+                                view.message = cue;
+                                view.message_sticky = true;
+                                stdout().write_all(b"\x07")?;
+                                stdout().flush()?;
+                            } else if !view.message_sticky {
+                                view.message.clear();
+                            }
                         }
-                        Err(error) => view.message = error,
+                        Err(error) => {
+                            view.message = error;
+                            view.message_sticky = true;
+                        }
                     }
                     pending = None;
                     last_load = Instant::now();
@@ -968,6 +1071,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     pending = None;
                     view.message = "Local state worker stopped.".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => (),
+            }
+        }
+        if let Some(worker) = &popup_pending {
+            match worker.receiver.try_recv() {
+                Ok(Ok(())) => {
+                    view.message = "SSH popup closed; dashboard remained active.".into();
+                    view.message_sticky = true;
+                    popup_pending = None;
+                }
+                Ok(Err(error)) => {
+                    view.message = error;
+                    view.message_sticky = true;
+                    popup_pending = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    view.message = "SSH popup worker stopped.".into();
+                    view.message_sticky = true;
+                    popup_pending = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => (),
             }
@@ -1176,9 +1299,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let rows = grouped(&data, &view);
             let selected = selected(&data, &view);
             let mut action = None;
-            if let Some(name) = view.confirm.take() {
-                if key.code == KeyCode::Char('y') {
-                    action = Some(("close", name));
+            if let Some(name) = view.confirm.clone() {
+                let (columns, height) = terminal::size()?;
+                if columns < 56 || height < 16 {
+                    if matches!(key.code, KeyCode::Char('n') | KeyCode::Esc) {
+                        view.confirm = None;
+                    }
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('y') => {
+                        view.confirm = None;
+                        action = Some(("close", name));
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => view.confirm = None,
+                    _ => continue,
                 }
             } else if matches!(
                 key.code,
@@ -1309,18 +1444,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             } else if !m.ssh {
                                 view.message = if m.finished {
                                     "This machine is closed."
+                                } else if m.unresolved {
+                                    "SSH unavailable; check preparation and cleanup status."
                                 } else {
                                     "SSH opens when the full VM is ready."
                                 }
                                 .into();
+                            } else if env::var_os("FISSION_TMUX_SESSION").is_some() {
+                                if popup_pending.is_some() {
+                                    view.message = "An SSH popup is already open.".into();
+                                    view.message_sticky = true;
+                                } else {
+                                    popup_pending = Some(open_popup(
+                                        node.clone(),
+                                        tmux_helper.to_string_lossy().into_owned(),
+                                        m.name.clone(),
+                                    ));
+                                    view.message = format!("Opening {} in a tmux popup...", m.name);
+                                    view.message_sticky = false;
+                                }
                             } else {
                                 drop(screen.take());
                                 let result = (|| -> io::Result<_> {
                                     let mut command = Command::new(&node);
                                     command.arg(&cli).args(["advanced", "ssh", &m.name]);
-                                    if env::var_os("FISSION_TMUX_SESSION").is_some() {
-                                        command.arg("--tmux");
-                                    }
                                     let mut child = command.spawn()?;
                                     let mut stopping = false;
                                     loop {
@@ -1344,6 +1491,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     Ok(status) => format!("SSH exited {status}."),
                                     Err(error) => error.to_string(),
                                 };
+                                view.message_sticky = true;
                                 last_load = Instant::now();
                             }
                         }
@@ -1361,6 +1509,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "quote" => "Fetching a fresh quote...".into(),
                         _ => "Reloading local state...".into(),
                     };
+                    view.message_sticky = false;
                 }
                 if action == "catalog" {
                     if catalog_pending.is_none() {
@@ -1500,5 +1649,42 @@ mod tests {
         assert!(!view.detail);
         assert_eq!(view.offset, 0);
         assert!(selected(&closed, &view).is_none());
+    }
+
+    #[test]
+    fn snapshot_cues_report_state_transitions_without_new_record_noise() {
+        let mut before_ready = machine("ready-one", true, false, false, None);
+        let mut after_ready = machine("ready-one", true, false, true, None);
+        after_ready.ssh = true;
+        let mut before_finished = machine("done-one", true, false, true, None);
+        let after_finished = machine("done-one", true, true, false, None);
+        let before_not_rented = machine("skipped-one", true, false, false, None);
+        let mut after_not_rented = machine("skipped-one", true, true, false, None);
+        after_not_rented.phase = "not_purchased".into();
+        before_ready.ssh = false;
+        before_finished.finished = false;
+
+        let cue = snapshot_cue(
+            &snapshot(vec![before_ready, before_finished, before_not_rented]),
+            &snapshot(vec![
+                after_ready,
+                after_finished,
+                after_not_rented,
+                machine("new-history", true, true, false, None),
+            ]),
+        )
+        .unwrap();
+
+        assert!(cue.contains("Ready: ready-one"));
+        assert!(cue.contains("Finished: done-one (succeeded)"));
+        assert!(cue.contains("Not rented: skipped-one"));
+        assert!(!cue.contains("new-history"));
+        assert!(
+            snapshot_cue(
+                &Snapshot::default(),
+                &snapshot(vec![machine("first-load", true, false, true, None,)])
+            )
+            .is_none()
+        );
     }
 }
