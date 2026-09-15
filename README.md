@@ -45,7 +45,13 @@ fission status check-a --wait 10m
 
 `status` returns outcome, jobs, observed cost, evidence paths and hashes, report path, and cleanup state. After local sleep, reboot, or owner interruption, `fission status NAME --resume` resumes observation of the same recorded purchase and submission; it never buys a replacement. Keep using status until cleanup is confirmed—timeout, provider `404`, or guest shutdown alone is not proof of destruction.
 
+Automatic selection retains compatible alternatives from the quoted shortlist, cheapest first. Before payment, a failed quote or changed capacity can select another retained machine within the task creation cap, preserving lifecycle headroom, resources, region and duration. There is no percentage premium limit. The preview exposes alternatives and failures; an uncertain purchase never triggers a second rental. Current VM offers still share one gateway, so this does not yet protect against a gateway-wide outage.
+
 Bare `fission` opens the Rust task dashboard. Click a task to inspect it. Inside `fission advanced tmux`, **SSH terminal** opens a small popup while the dashboard keeps refreshing; a plain dashboard uses fullscreen SSH and resumes refresh after the shell exits. Stopping requires a second confirmation: provider cleanup may lose guest files that were not collected, but local task/experiment folders, collected evidence and reports, and caches already saved by successful builds remain. Other experiment machines keep running.
+
+Press `q` twice consecutively to quit the dashboard, not the task. The first press shows a confirmation cue; another key or an actionable mouse event cancels it. Ready and finished transitions emit a dashboard-local bell and visible cue, not an external notification.
+
+In **Available**, `b` cycles between within-budget VM offers, all VM prices, and **Gateways**. Only usable gateways appear; details show the compute operator, pricing units and supported scope. The view is read-only and remains available when live VM discovery fails. Sandbox-per-call prices are not comparable to VM-per-day prices. Unavailable candidates stay in [gateway qualification](docs/rental.md#gateway-qualification), not the dashboard.
 
 `run`, `status`, `stop`, `help`, and `budget` are the normal interface. Manual lifecycle, jobs, transfers, storage, cache, dataset, SSH, and recovery commands are intentionally secondary under `fission advanced`.
 
@@ -127,7 +133,7 @@ All normal command output is JSON. Flags before `--` configure Fission; everythi
 
 ## Limits and evidence boundaries
 
-- Only MPP/Tempo-paid Linux x86_64 compute is supported. A configured local Tempo CLI wallet is required; Fission does not refill, swap, bridge, or on-ramp funds.
+- The implemented purchase path is MPP/Tempo-paid Linux x86_64 compute with a configured local Tempo CLI wallet. x402 is permitted, but no x402 VM gateway is integrated yet; [gateway checks](docs/rental.md#gateway-qualification) distinguish discovery from usable lifecycle support. Fission does not refill, swap, bridge, or on-ramp funds.
 - Foundry and development-chain results are bounded model or local-chain evidence, not public-network consensus. Fork RPC state is trusted input.
 - Reth `synced` currently supports Ethereum with paired Lighthouse. Base-Reth and Reth-BSC full-node variants are unavailable.
 - Source compilation proves buildability, not runtime correctness. A Cargo command that matches zero tests is not a successful validation.

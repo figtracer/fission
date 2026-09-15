@@ -63,8 +63,8 @@ export function runProcess(command, args, options = {}) {
 export async function quote(operation, body, provider = "modal-tempo") {
   provider = providerId(provider);
   const url = provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
-  const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url]);
-  if (result.code !== 0) throw new Error(`Quote unavailable: ${result.stderr.trim() || result.stdout.trim()}`);
+  const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url], { timeoutMs: 60000 });
+  if (result.code !== 0) throw new Error(`Quote unavailable from ${provider}${body.plan ? ` for ${body.plan} in ${body.region}` : ""}: ${result.interruption === "observation_deadline" ? "dry-run timed out after 60000ms" : result.stderr.trim() || result.stdout.trim()}. No payment submitted.`);
   let offer;
   try { offer = JSON.parse(result.stdout); } catch { throw new Error("Provider returned an unreadable quote."); }
   if (offer.payment_required !== true || offer.intent !== "charge" || offer.method !== "tempo" ||

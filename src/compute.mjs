@@ -15,14 +15,21 @@ const credentials = (state) => join(directory(state.name), "compute-auth.json");
 export async function catalog() {
   // The default endpoint omits dedicated and GPU classes. Read every documented
   // category before comparing offers; an incomplete catalog fails discovery.
-  const categories = await Promise.all(["vps", "vhp", "vdc", "vcg"].map(async (type) => {
-    const response = await fetch(endpoint + "plans?type=" + type, { signal: AbortSignal.timeout(60000), redirect: "error" });
-    if (!response.ok) throw new Error(`Compute ${type} catalog HTTP ${response.status}.`);
-    const value = await response.json();
-    if (!Array.isArray(value.plans)) throw new Error(`Invalid compute ${type} catalog.`);
-    return value.plans;
+  const started = Date.now();
+  const categories = await Promise.allSettled(["vps", "vhp", "vdc", "vcg"].map(async (type) => {
+    try {
+      const response = await fetch(endpoint + "plans?type=" + type, { signal: AbortSignal.timeout(60000), redirect: "error" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const value = await response.json();
+      if (!Array.isArray(value.plans)) throw new Error("invalid plans response");
+      return value.plans;
+    } catch (error) {
+      throw new Error(`${type}: ${error.name === "TimeoutError" ? "timed out after 60000ms" : error.message}`);
+    }
   }));
-  return categories.flat();
+  const failed = categories.filter((item) => item.status === "rejected");
+  if (failed.length) throw new Error(`compute-mpp catalog at ${endpoint}plans incomplete after ${Date.now() - started}ms (${failed.map((item) => item.reason.message).join("; ")}). All current VM offers share this gateway.`);
+  return categories.flatMap((item) => item.value);
 }
 
 export function machineCapabilities(machine) {

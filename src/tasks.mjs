@@ -106,6 +106,10 @@ async function planTask(name, options, command, experiment) {
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
+    fallback: { baseline: plan.selection.baseline, creationCap: plan.creationCap,
+      providerCount: plan.selection.providerCount, quoteErrors: plan.selection.quoteErrors, skipped: plan.selection.skipped,
+      alternates: plan.selection.alternates.map((item) => ({ provider: plan.provider, machine: item.machine.id, resources: item.capabilities })),
+      note: "Pre-payment alternatives only, cheapest compatible first within the task's creation cap. Resources, region, duration and lifecycle headroom are preserved. All listed machines currently share one gateway; this is not independent-provider failover. No replacement after a purchase intent." },
     cache: task.cache || null, guidance: task.guidance, experiment: task.experiment || null,
     note: "Prepaid provider credit may outlive the authorized task; the supervisor closes early. No refund assumed. Run with --approve only within existing authorization." };
   return preview;
