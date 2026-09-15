@@ -160,8 +160,15 @@ def cache(mode, arguments):
                 with (staging / member.name).open('xb') as output:
                     shutil.copyfileobj(bundle.extractfile(member), output)
             record = json.loads((staging / 'build.json').read_text())
-            if record.get('identity') != json.loads(json.dumps(current)) or [pathlib.Path(item['path']).name for item in record['binaries']] != binaries:
+            if record.get('identity') != json.loads(json.dumps(current)):
+                if mode == 'cache-reuse':
+                    result = {'restored': False, 'reason': 'Exact source/toolchain/CPU/packages/flags identity differs; cold build required'}
+                    (root / 'cache-result.json').write_text(json.dumps(result) + '\n')
+                    print(json.dumps(result))
+                    return
                 raise RuntimeError('Cache belongs to a different source, harness, toolchain, flags, or platform')
+            if [pathlib.Path(item['path']).name for item in record['binaries']] != binaries:
+                raise RuntimeError('Cached binary list differs')
             for item in record['binaries']:
                 name = pathlib.Path(item['path']).name
                 if item['path'] != str(root / name) or sha(staging / name) != item['sha256']:
@@ -174,7 +181,10 @@ def cache(mode, arguments):
             record['restored'] = {'archiveSha256': expected, 'at': time.time()}
             (staging / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
             (staging / 'build.json').replace(root / 'build.json')
-        print(json.dumps({'ready': True, 'restored': record['restored'], 'identity': current}))
+        result = {'ready': True, 'restored': record['restored'], 'identity': current}
+        if mode == 'cache-reuse':
+            (root / 'cache-result.json').write_text(json.dumps(result) + '\n')
+        print(json.dumps(result))
 
 
 def main():
@@ -183,12 +193,16 @@ def main():
     if mode == 'apply':
         patch, expected = binaries
         apply_patch(root / 'source', pathlib.Path(patch), expected)
+        record = json.loads((root / 'source.json').read_text())
+        record['patchSha256'] = expected
+        record['identity'] = identity(root / 'source', record['binaries'], environment(root / 'source', record['binaries']))
+        (root / 'source.json').write_text(json.dumps(record, indent=2) + '\n')
         return
-    if mode in ['cache-save', 'cache-restore']:
+    if mode in ['cache-save', 'cache-restore', 'cache-reuse']:
         cache(mode, binaries)
         return
-    if mode not in ['prepare', 'build', 'verify']:
-        raise ValueError('Use prepare or build')
+    if mode not in ['prepare', 'build', 'ensure-build', 'verify', 'verify-source']:
+        raise ValueError('Use prepare, build, ensure-build, verify or verify-source')
     if mode == 'build':
         (root / 'build.json').unlink(missing_ok=True)
     source = pathlib.Path.cwd() if mode == 'build' else root / 'source'
@@ -201,11 +215,21 @@ def main():
     commit = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
     cargo_home = root / '.cargo'
     env = environment(source, binaries)
+    if mode == 'verify-source':
+        record = json.loads((root / 'source.json').read_text())
+        if record['identity'] != json.loads(json.dumps(identity(source, binaries, env))):
+            raise RuntimeError('Source identity changed after preparation/patch; tests refused')
+        print(json.dumps({'ready': True, 'source': record}))
+        return
     if mode == 'verify':
         record = verified_build(root, identity(source, binaries, env))
         print(json.dumps({'ready': True, 'build': record}))
         return
-    if mode == 'build':
+    if mode == 'ensure-build' and (root / 'build.json').exists():
+        record = verified_build(root, identity(source, binaries, env))
+        print(json.dumps({'ready': True, 'compiled': False, 'build': record}))
+        return
+    if mode in ['build', 'ensure-build']:
         before = identity(source, binaries, env)
         command = [str(cargo_home / 'bin' / 'cargo'), 'build', '--locked', '--release']
         for binary in binaries:
@@ -256,7 +280,8 @@ def main():
     # Subsequent agent jobs can use absolute paths without shell activation.
     for name in ['cargo', 'rustc', 'rustup']:
         wrapper = root / name
-        wrapper.write_text(f'#!/bin/sh\nexport CARGO_HOME=/workspace/.cargo RUSTUP_HOME=/workspace/.rustup RUSTUP_TOOLCHAIN={TOOLCHAIN}\nexport PATH="/workspace/.cargo/bin:$PATH"\nexec /workspace/.cargo/bin/' + name + ' "$@"\n')
+        native = 'export LLVM_SYS_221_PREFIX=/usr/lib/llvm-22\n' if binaries == ['reth'] else ''
+        wrapper.write_text(f'#!/bin/sh\nexport CARGO_HOME=/workspace/.cargo RUSTUP_HOME=/workspace/.rustup RUSTUP_TOOLCHAIN={TOOLCHAIN}\nexport CARGO_TARGET_DIR=/workspace/source/target\nexport PATH="/workspace/.cargo/bin:$PATH"\n' + native + 'exec /workspace/.cargo/bin/' + name + ' "$@"\n')
         wrapper.chmod(0o700)
     build = root / 'build'
     build.write_text('#!/bin/sh\ncd /workspace/source || exit\nexec python3 /workspace/.fission/rust-source.py build ' + ' '.join(binaries) + '\n')

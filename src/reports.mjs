@@ -53,6 +53,7 @@ export async function report(name, id, options = {}) {
     ...(state.task ? { task: { harness: state.task.harness, mode: state.task.mode, outcome: state.task.outcome,
       timing: state.task.timing, deadline: state.task.deadline, command: state.task.command,
       inputs: state.task.inputs, artifacts: state.task.artifacts, exports: state.task.exports || [], lastError: state.task.lastError || null,
+      cache: state.task.cache || null, experiment: state.task.experiment || null, guidance: state.task.guidance || null,
       jobs: (await listJobs(name)).map((job) => ({ id: job.id, phase: job.phase, digest: job.digest, observation: job.observation })) } } : {}),
     harness: { recipeSha256, recipeVerified, runnerSha256: job?.runnerSha256 || null },
     measurements, readiness: [...checks, ...(job?.observation?.readiness ? [job.observation.readiness] : [])],
@@ -73,7 +74,7 @@ export async function report(name, id, options = {}) {
       verifiedOutflow: unknown ? null : amount(transactions.reduce((sum, transaction) => sum + units(transaction.paid), 0n)),
       incomplete: unknown, refreshError: payments.refreshError || null, transactions },
     assessment: notes, log: null,
-    cleanup: { phase: state.phase, confirmed: ["terminated", "expired"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
+    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
   };
   const parent = resolve(options.output || "fission", name);
   await mkdir(parent, { recursive: true });

@@ -1,17 +1,19 @@
 import { spawn } from "node:child_process";
 import { mkdir, open, readFile } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, processAlive, OperationLocked } from "./state.mjs";
 import { createPlan, openPlan } from "./plans.mjs";
-import { taskSpec } from "./harnesses.mjs";
-import { budget, units } from "./budget.mjs";
+import { taskSpec, taskOptions } from "./harnesses.mjs";
+import { budget, units, amount } from "./budget.mjs";
 import { active, prepare, reconcile, refresh, close, upload, download, terminal, operationCap } from "./workspace.mjs";
 import { execute } from "./provider.mjs";
 import { launch, listJobs, getJob, jobDone } from "./jobs.mjs";
 import { report } from "./reports.mjs";
 import { fingerprint } from "./experiments.mjs";
+import { cachePreflight, buildCache } from "./cache.mjs";
+import { guidance } from "./onboarding.mjs";
 
 // The plan owns authorization; workspace state owns coordination; jobs own
 // execution. This supervisor cannot purchase. Recorded mutations are observed,
@@ -19,6 +21,7 @@ import { fingerprint } from "./experiments.mjs";
 const ownerPath = (name) => join(directory(name), "supervisor.lock");
 // Two bounded 60s HTTP management requests: DELETE and its confirmation.
 const teardownReserveMs = 120000;
+const creationLock = join(root, ".task-create.lock");
 const update = (name, change, waitMs = 0) => locked(name, async () => {
   const state = await load(name);
   await change(state.task, state);
@@ -26,29 +29,155 @@ const update = (name, change, waitMs = 0) => locked(name, async () => {
   return state;
 }, waitMs);
 
-export async function runTask(name, options, command) {
+async function creationLocked(action, waitMs = 0) {
+  const deadline = Date.now() + waitMs;
+  while (true) {
+    await recoverLock(creationLock);
+    try { return await fileLocked(creationLock, action, Math.min(1000, Math.max(0, deadline - Date.now()))); }
+    catch (error) {
+      if (!(error instanceof OperationLocked) || Date.now() >= deadline) throw error;
+    }
+  }
+}
+
+const sameMembers = (left, right) => Array.isArray(left) && Array.isArray(right) &&
+  left.length === right.length && left.every((item, index) => item === right[index]);
+const matchesExperiment = (task, expected) => task?.experiment?.name === expected.name &&
+  sameMembers(task.experiment.members, expected.members);
+
+async function reservations() {
+  const names = new Set();
+  for (const state of await list()) {
+    const experiment = state.task?.experiment;
+    if (!experiment) continue;
+    names.add(experiment.name);
+    for (const member of experiment.members || []) names.add(member);
+  }
+  return names;
+}
+
+async function experimentStatus(name) {
+  const declarations = (await list()).filter((state) => state.task?.experiment?.name === name);
+  if (!declarations.length) throw new Error(`No saved task or experiment named ${name}.`);
+  const members = declarations[0].task.experiment.members;
+  if (!Array.isArray(members) || !members.length || new Set(members).size !== members.length ||
+      declarations.some((state) => !members.includes(state.name) || !sameMembers(state.task.experiment.members, members)))
+    throw new Error(`Experiment ${name} has inconsistent member records; refusing group operation.`);
+  const expected = { name, members };
+  const machines = [];
+  for (const child of members) {
+    const state = await readJSON(join(directory(child), "state.json"));
+    if (!state) machines.push({ name: child, phase: "not_purchased", outcome: "not_purchased", cleanup: { confirmed: true } });
+    else if (!matchesExperiment(state.task, expected))
+      throw new Error(`Experiment member ${child} is occupied by unrelated state; refusing group operation.`);
+    else machines.push(await taskStatus(child, expected));
+  }
+  return { name, machines, phase: machines.every((item) => ["done", "not_purchased"].includes(item.phase)) ? "done" : "running",
+    outcome: machines.every((item) => item.outcome === "succeeded") ? "succeeded" : "incomplete",
+    cleanup: { confirmed: machines.every((item) => item.cleanup.confirmed) } };
+}
+
+async function planTask(name, options, command, experiment) {
   directory(name);
   if (await readJSON(join(directory(name), "state.json"))) throw new Error("Task name already recorded. Use status NAME --resume; run never repeats a purchase.");
+  if ((await reservations()).has(name)) throw new Error("Name is reserved by a recorded experiment; choose another task or experiment name.");
   const { definition, disk, task } = await taskSpec(options, command);
   const ledger = await budget();
   if (units(options.budget) > units(ledger.availableToAllocate)) throw new Error("Retained aggregate authorization cannot cover this task. No quote or purchase submitted.");
+  if (experiment) task.experiment = experiment;
+  task.guidance = await guidance("", { ...options, mode: task.mode });
+  if (["test", "build"].includes(task.mode)) {
+    task.cache = await cachePreflight({ ...options, mode: task.mode }, definition);
+    const candidate = task.cache.candidate;
+    if (candidate) {
+      const remote = "/workspace/.fission/build-cache.tar.gz";
+      if (task.inputs.some((input) => input.remote === remote)) throw new Error("Input conflicts with the selected build cache.");
+      task.inputs.push({ local: candidate.local, remote, bytes: candidate.bytes, sha256: candidate.id });
+      task.preparation.unshift(["python3", "/workspace/.fission/rust-source.py", "cache-reuse", remote, candidate.id, String(candidate.maximum)]);
+      task.artifacts.push("/workspace/cache-result.json");
+    }
+  }
   const { digest, ...recipe } = definition;
   const plan = await createPlan(name, { recipe, repo: options.repo, ref: options.ref, disk,
     cpu: options.cpu, memory: options.memory, budget: options.budget, duration: options.duration,
     region: options.region, cheapest: true, kind: "vm", os: "linux", arch: "x86_64" }, task);
-  if (plan.status === "unavailable") return plan;
+  if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, harness: task.harness, mode: task.mode,
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
-    lease: plan.lease || { prepaidHours: 24 }, context: task.context,
+    lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
+    cache: task.cache || null, guidance: task.guidance, experiment: task.experiment || null,
     note: "Prepaid provider credit may outlive the authorized task; the supervisor closes early. No refund assumed. Run with --approve only within existing authorization." };
-  if (!options.approve) return preview;
-  try { await openPlan(name, plan.id); }
+  return preview;
+}
+
+async function openTask(name, plan) {
+  try { await openPlan(name, plan); }
   finally {
     // Even a lost creation response leaves a recoverable task, not permission to buy again.
     const state = await readJSON(join(directory(name), "state.json"));
     if (state?.task) await resumeTask(name);
   }
+  return taskStatus(name);
+}
+
+export async function runTask(name, options, command) {
+  return creationLocked(async () => {
+    const preview = await planTask(name, options, command);
+    if (!options.approve || preview.status === "unavailable") return preview;
+    return openTask(name, preview.plan);
+  });
+}
+
+// A multi-machine experiment is a set of ordinary tasks, not a second runtime.
+// Every task keeps its own durable purchase/job/cleanup markers and shared ledger.
+export async function runMachines(name, options) {
+  // Serialize namespace checks with single-task creation too: a task cannot hide
+  // an experiment, and concurrent manifests cannot disagree about its members.
+  return creationLocked(() => createMachines(name, options));
+}
+
+async function createMachines(name, options) {
+  directory(name);
+  const file = resolve(options.from), spec = await readJSON(file);
+  if (spec?.schemaVersion !== 1 || Object.keys(spec).some((key) => !["schemaVersion", "machines"].includes(key)) || !Array.isArray(spec.machines) || !spec.machines.length)
+    throw new Error("Experiment file requires schemaVersion 1 and a nonempty machines array; see help run.");
+  if ((await list()).some((state) => state.name === name || state.task?.experiment?.name === name))
+    throw new Error("Experiment already recorded. Use status/stop on its tasks; never repeat a group purchase.");
+  const machines = [];
+  for (const entry of spec.machines) {
+    if (!entry || Object.keys(entry).some((key) => !["name", "command", ...taskOptions].includes(key)) || !Array.isArray(entry.command))
+      throw new Error("Each machine needs a role name, command argv, and run options; unknown fields reject.");
+    directory(entry.name);
+    const child = `${name}-${entry.name}`;
+    directory(child);
+    if (machines.some((item) => item.name === child) || await readJSON(join(directory(child), "state.json")))
+      throw new Error("Machine names must be unique and unused.");
+    const { name: role, command, ...settings } = entry;
+    for (const field of ["patch", "manifest", "snapshot-plan", "output"]) if (settings[field]) settings[field] = resolve(dirname(file), settings[field]);
+    if (settings.input) settings.input = settings.input.map((mapping) => {
+      const i = mapping.indexOf("=");
+      return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
+    });
+    await taskSpec(settings, command); // Validate every role before the first quote.
+    machines.push({ name: child, role, settings, command });
+  }
+  const reserved = await reservations();
+  if (reserved.has(name) || machines.some((machine) => reserved.has(machine.name)))
+    throw new Error("Experiment or machine name is reserved by a recorded experiment. No quote or purchase submitted.");
+  const allocation = machines.reduce((sum, item) => sum + units(item.settings.budget), 0n);
+  if (allocation > units(options.budget) || allocation > units((await budget()).availableToAllocate))
+    throw new Error("Combined machine allocations exceed the experiment budget or retained authorization. No quote or purchase submitted.");
+  const previews = [];
+  const members = machines.map((item) => item.name);
+  for (const machine of machines) previews.push(await planTask(machine.name, machine.settings, machine.command, { name, role: machine.role, members }));
+  const unavailable = previews.some((item) => item.status === "unavailable");
+  const preview = { name, status: unavailable ? "unavailable" : "planned", paymentSubmitted: false, machineCount: previews.length,
+    budget: options.budget, combinedAllocation: amount(allocation), currency: "USDC.e", machines: previews,
+    combinedCreationQuote: unavailable ? null : amount(previews.reduce((sum, item) => sum + units(item.quote), 0n)),
+    note: "--approve accepts all listed machines. Purchases are sequential, not atomic; work runs independently. A later purchase failure leaves earlier tasks supervised. No replacements; status/stop accepts the experiment name. Compare actual machine/traffic conditions before performance claims." };
+  if (!options.approve || unavailable) return preview;
+  for (const machine of previews) await openTask(machine.name, machine.plan);
   return taskStatus(name);
 }
 
@@ -77,9 +206,12 @@ export function nextTaskStep(state, jobs, now = Date.now()) {
   return jobDone(work) ? "finish" : "work";
 }
 
-export async function taskStatus(name) {
+export async function taskStatus(name, expectedExperiment) {
   if (!name) return Promise.all((await list()).map((state) => taskStatus(state.name)));
+  if (!await readJSON(join(directory(name), "state.json"))) return experimentStatus(name);
   const state = await load(name), task = state.task;
+  if (expectedExperiment && !matchesExperiment(task, expectedExperiment))
+    throw new Error(`Experiment member ${name} changed identity; refusing group operation.`);
   if (!task) return { name, phase: state.phase, legacy: true, cleanupConfirmed: terminal(state), note: "Retained workspace; use advanced for recovery." };
   const jobs = await listJobs(name), owner = await readJSON(ownerPath(name));
   const record = task.report?.record ? await readJSON(task.report.record) : null;
@@ -88,11 +220,15 @@ export async function taskStatus(name) {
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
-    cleanup: { phase: state.phase, confirmed: terminal(state), observedAt: state.closedAt || null },
-    report: task.report?.report || null, evidence: task.exports || [], lastError: task.lastError || null };
+    cleanup: { phase: state.phase, confirmed: terminal(state) || state.phase === "not_submitted", observedAt: state.closedAt || null },
+    report: task.report?.report || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
 export async function resumeTask(name) {
+  if (!await readJSON(join(directory(name), "state.json"))) {
+    const status = await taskStatus(name);
+    return Promise.all(status.machines.filter((item) => item.phase !== "not_purchased").map((item) => resumeTask(item.name)));
+  }
   const state = await load(name);
   if (!state.task) throw new Error("This is a retained low-level workspace, not a managed task. Use advanced reconcile.");
   // PID ownership lives only in locks, never in a second task/financial registry.
@@ -110,12 +246,23 @@ export async function resumeTask(name) {
   } finally { await log.close(); }
 }
 
-export async function stopTask(name) {
+export async function stopTask(name, expectedExperiment) {
+  if (!await readJSON(join(directory(name), "state.json"))) {
+    // Creation is sequential and prepaid. A stop arriving mid-create waits for
+    // that approved purchase set to finish, snapshots its final members, then
+    // releases the global lock before waiting on any child operation lock.
+    const status = await creationLocked(() => experimentStatus(name), 600000);
+    const expected = { name, members: status.machines.map((item) => item.name) };
+    for (const item of status.machines) if (item.phase !== "not_purchased") await stopTask(item.name, expected);
+    return taskStatus(name);
+  }
   // A killed owner can leave its operation lock behind. Reclaim only a proven
   // dead PID before recording cancellation; never wait ten minutes on that lock.
   await recoverLock(join(directory(name), "operation.lock"));
   await update(name, (task) => {
     if (!task) throw new Error("Use advanced close for a retained low-level workspace.");
+    if (expectedExperiment && !matchesExperiment(task, expectedExperiment))
+      throw new Error(`Experiment member ${name} changed identity; refusing cancellation.`);
     task.stopRequestedAt ??= new Date().toISOString();
   }, 600000); // Let an in-flight bounded preparation/transfer release its lock.
   await resumeTask(name);
@@ -169,6 +316,18 @@ async function finish(name, jobs) {
     } catch (error) {
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), { phase: "partial", error: error.message }); });
     }
+  }
+  if (state.task.mode === "build" && state.task.cache && !state.task.cache.save) {
+    const eligible = state.task.outcome === "succeeded" && !state.task.inputs.some((input) => input.remote === "/workspace/source.patch") && Date.now() < transfer.deadline;
+    state = await update(name, (task) => { task.cache.save = { phase: eligible ? "attempted" : "skipped", reason: eligible ? "Save once after evidence, within cleanup cutoff" : "Requires successful clean build and remaining collection time" }; });
+    if (eligible) {
+      try {
+        const record = await buildCache("save", name, undefined, undefined, state.task.cache.directory, transfer);
+        await update(name, (task) => { task.cache.save = { phase: "saved", id: record.id, bytes: record.bytes, directory: task.cache.directory }; });
+      } catch (error) { await update(name, (task) => { task.cache.save = { phase: "unresolved", reason: error.message }; }); }
+    }
+  } else if (state.task.cache?.save?.phase === "attempted") {
+    await update(name, (task) => { task.cache.save = { phase: "unresolved", reason: "Owner interrupted during cache save; not replayed" }; });
   }
   await close(name, { "discard-output": true });
 }

@@ -8,6 +8,8 @@ import { execute } from "./provider.mjs";
 export function probes(recipe, scope, maxHeadAge) {
   let checks = recipe.checks?.filter((probe) => probe.scope === scope) || [];
   if (!checks.length && scope === "tools") checks = (recipe.readiness || []).map((argv, i) => ({ name: `tool-${i + 1}`, scope, argv, result: "exit" }));
+  if (!checks.length && scope === "source" && Object.hasOwn(sourceRecipes, recipe.name))
+    checks = [{ name: "prepared-source", scope, argv: ["python3", "/workspace/.fission/rust-source.py", "verify-source", ...sourceRecipes[recipe.name]], result: "json" }];
   if (!checks.length && scope === "build" && Object.hasOwn(sourceRecipes, recipe.name))
     checks = [{ name: "compiled-artifacts", scope, argv: ["python3", "/workspace/.fission/rust-source.py", "verify", ...sourceRecipes[recipe.name]], result: "json" }];
   if (!checks.length && scope === "node" && recipe.name === "reth-synced") {

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "revision": "2026-09-15.1",
+  "sources": {
+    "foundry": { "repository": "https://github.com/foundry-rs/foundry", "revision": "982849d3140c01fd3b72905759581a132df7aa98" },
+    "reth": { "repository": "https://github.com/paradigmxyz/reth", "revision": "b2d7bd7f3fb04077f89f3368c6df9affdc8af095" },
+    "tempo": { "repository": "https://github.com/tempoxyz/tempo", "revision": "1ec5653e39c97e02807dddf5e7106e979f3ad909" }
+  },
+  "entries": [
+    { "id": "foundry/fuzz-invariants", "harness": "foundry", "modes": ["tools"], "summary": "Contract fuzz campaigns and stateful invariants; retain seeds, counts and non-vacuity evidence.", "tags": ["forge", "contract", "fuzz", "invariant", "seed", "handler"], "guide": "harnesses/foundry" },
+    { "id": "foundry/symbolic", "harness": "foundry", "modes": ["tools"], "summary": "Bounded symbolic properties with Z3; distinguish pass, replayed counterexample and incomplete execution.", "tags": ["symbolic", "symex", "solver", "z3", "smt", "counterexample"], "guide": "harnesses/foundry" },
+    { "id": "foundry/client-tests", "harness": "foundry", "modes": ["test"], "summary": "Test changed Foundry crates directly; Cargo compiles only the selected test graph.", "tags": ["cargo", "source", "test", "bench", "compiler", "pr"], "guide": "harnesses/source-tests-and-builds" },
+    { "id": "foundry/client-build", "harness": "foundry", "modes": ["build"], "summary": "Produce changed Foundry release binaries, checking compatible local caches first.", "tags": ["cargo", "source", "build", "cache", "binary"], "guide": "harnesses/source-tests-and-builds" },
+    { "id": "reth/network-tests", "harness": "reth", "modes": ["test"], "summary": "Fetcher, transaction gossip and local-peer integration tests; no mainnet snapshot required.", "tags": ["cargo", "test", "bench", "fetcher", "gossip", "network", "peer", "26924"], "guide": "harnesses/reth" },
+    { "id": "reth/client-build", "harness": "reth", "modes": ["build"], "summary": "Build changed Reth with pinned source and native dependencies; compilation is not node readiness.", "tags": ["cargo", "source", "build", "llvm", "cache", "binary"], "guide": "harnesses/source-tests-and-builds" },
+    { "id": "reth/development", "harness": "reth", "modes": ["dev"], "summary": "Private transaction and RPC behavior, verified against client version and genesis.", "tags": ["rpc", "transaction", "receipt", "genesis", "dev"], "guide": "harnesses/reth" },
+    { "id": "reth/synced-ethereum", "harness": "reth", "modes": ["synced"], "summary": "Full-state Ethereum and paired consensus readiness; public gossip measurements need comparable peers and warm-up.", "tags": ["ethereum", "mainnet", "snapshot", "lighthouse", "sync", "gossip", "performance"], "guide": "reth" },
+    { "id": "tempo/native-transactions", "harness": "tempo", "modes": ["dev"], "summary": "Native envelopes, fee token/payer and nonce lanes on an isolated Tempo node.", "tags": ["tip20", "fee", "nonce", "sponsor", "batch", "0x76", "dev"], "guide": "harnesses/tempo" },
+    { "id": "tempo/contract-model", "harness": "tempo", "modes": ["tools"], "summary": "Foundry's Tempo contract execution model, not native node or public consensus validation.", "tags": ["forge", "contract", "model", "simulation", "hardfork"], "guide": "harnesses/tempo" },
+    { "id": "tempo/client-tests", "harness": "tempo", "modes": ["test"], "summary": "Test selected Tempo source crates without building the node first.", "tags": ["cargo", "source", "test", "bench", "pr"], "guide": "harnesses/source-tests-and-builds" },
+    { "id": "tempo/client-build", "harness": "tempo", "modes": ["build"], "summary": "Build changed Tempo release binaries and retain compatible local build artifacts.", "tags": ["cargo", "source", "build", "cache", "binary"], "guide": "harnesses/source-tests-and-builds" }
+  ]
+}

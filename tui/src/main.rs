@@ -73,8 +73,6 @@ struct Offer {
 struct Machine {
     name: String,
     #[serde(default)]
-    project: String,
-    #[serde(default)]
     active: bool,
     #[serde(default)]
     unresolved: bool,
@@ -99,8 +97,16 @@ struct Machine {
     #[serde(default)]
     managed: bool,
     #[serde(default)]
+    experiment: Option<Experiment>,
+    #[serde(default)]
     task_detail: String,
     transactions: Vec<Transaction>,
+}
+
+#[derive(Deserialize)]
+struct Experiment {
+    name: String,
+    role: String,
 }
 
 #[derive(Deserialize)]
@@ -110,7 +116,6 @@ struct Transaction {
     hash: String,
 }
 
-#[derive(Default)]
 struct View {
     filter: usize,
     sort: usize,
@@ -126,7 +131,29 @@ struct View {
     available: bool,
     all_prices: bool,
     region: usize,
-    collapsed: BTreeSet<String>,
+    collapsed: BTreeSet<GroupKey>,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            filter: 0,
+            sort: 0,
+            index: 0,
+            detail: false,
+            offset: 0,
+            top: 0,
+            help: false,
+            storage: false,
+            g_pending: false,
+            confirm: None,
+            message: String::new(),
+            available: false,
+            all_prices: false,
+            region: 0,
+            collapsed: BTreeSet::from([GroupKey::Retained]),
+        }
+    }
 }
 
 fn offers<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Offer> {
@@ -139,7 +166,7 @@ fn offers<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Offer> {
     })
 }
 
-const FILTERS: [&str; 3] = ["all", "active", "history"];
+const FILTERS: [&str; 3] = ["tasks", "active", "all records"];
 const SORTS: [&str; 4] = ["recent", "name", "paid", "expiry"];
 
 fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
@@ -148,8 +175,8 @@ fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
         .iter()
         .filter(|m| match view.filter {
             1 => m.active,
-            2 => !m.active,
-            _ => true,
+            2 => true,
+            _ => m.managed || !m.finished,
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -179,24 +206,84 @@ fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
     rows
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum GroupKey {
+    NeedsReview,
+    Experiment(String),
+    Managed,
+    Retained,
+}
+
+impl GroupKey {
+    fn title(&self) -> String {
+        match self {
+            Self::NeedsReview => "Needs review".into(),
+            Self::Experiment(name) => format!("Experiment: {name}"),
+            Self::Managed => "Managed tasks".into(),
+            Self::Retained => "Retained workspaces".into(),
+        }
+    }
+}
+
+fn group_key(machine: &Machine) -> GroupKey {
+    if let Some(experiment) = machine.experiment.as_ref().filter(|_| machine.managed) {
+        GroupKey::Experiment(experiment.name.clone())
+    } else if machine.managed {
+        GroupKey::Managed
+    } else if !machine.finished {
+        GroupKey::NeedsReview
+    } else {
+        GroupKey::Retained
+    }
+}
+
 enum Row<'a> {
-    Project(&'a str, usize),
+    Group(GroupKey, usize),
     Machine(&'a Machine),
 }
 
 fn grouped<'a>(data: &'a Snapshot, view: &View) -> Vec<Row<'a>> {
-    let mut projects: BTreeMap<&str, Vec<&Machine>> = BTreeMap::new();
+    let mut groups: BTreeMap<GroupKey, Vec<&Machine>> = BTreeMap::new();
     for machine in machines(data, view) {
-        projects.entry(&machine.project).or_default().push(machine);
+        groups.entry(group_key(machine)).or_default().push(machine);
     }
     let mut rows = Vec::new();
-    for (project, machines) in projects {
-        rows.push(Row::Project(project, machines.len()));
-        if !view.collapsed.contains(project) {
+    for (group, machines) in groups {
+        rows.push(Row::Group(group.clone(), machines.len()));
+        if !view.collapsed.contains(&group) {
             rows.extend(machines.into_iter().map(Row::Machine));
         }
     }
     rows
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Selection {
+    Group(GroupKey),
+    Machine(String),
+}
+
+fn selection(data: &Snapshot, view: &View) -> Option<Selection> {
+    grouped(data, view).get(view.index).map(|row| match row {
+        Row::Group(group, _) => Selection::Group(group.clone()),
+        Row::Machine(machine) => Selection::Machine(machine.name.clone()),
+    })
+}
+
+fn restore_selection(data: &Snapshot, view: &mut View, previous: Option<Selection>) {
+    let rows = grouped(data, view);
+    let found = previous.as_ref().and_then(|selection| {
+        rows.iter().position(|row| match (row, selection) {
+            (Row::Group(group, _), Selection::Group(previous)) => group == previous,
+            (Row::Machine(machine), Selection::Machine(previous)) => &machine.name == previous,
+            _ => false,
+        })
+    });
+    if matches!(previous, Some(Selection::Machine(_))) && found.is_none() {
+        view.detail = false;
+        view.offset = 0;
+    }
+    view.index = found.unwrap_or(view.index.min(rows.len().saturating_sub(1)));
 }
 
 fn selected<'a>(data: &'a Snapshot, view: &View) -> Option<&'a Machine> {
@@ -499,12 +586,20 @@ fn render(
                 ));
             }
         } else if !view.detail {
+            let managed = data.machines.iter().filter(|m| m.managed).count();
+            let needs_review = data
+                .machines
+                .iter()
+                .filter(|m| !m.managed && !m.finished)
+                .count();
+            let retained = data.machines.len().saturating_sub(managed + needs_review);
             lines.push((
                 format!(
-                    "Tasks   {} active   {} saved   {} unresolved",
+                    "Tasks   {} active   {} managed   {} review   {} retained",
                     data.machines.iter().filter(|m| m.active).count(),
-                    data.machines.len(),
-                    data.machines.iter().filter(|m| m.unresolved).count()
+                    managed,
+                    needs_review,
+                    retained
                 ),
                 1,
             ));
@@ -533,33 +628,42 @@ fn render(
                 .skip(view.top)
                 .take(count)
             {
-                let text = match item {
-                    Row::Project(project, count) => format!(
-                        "{} {} {} ({count})",
-                        if i == view.index { ">" } else { " " },
-                        if view.collapsed.contains(*project) {
-                            "+"
-                        } else {
-                            "-"
-                        },
-                        project
-                    ),
-                    Row::Machine(m) => format!(
-                        "{} {}",
-                        if i == view.index { ">" } else { " " },
-                        row(
-                            &format!("  {}{}", if m.provider_warning { "! " } else { "" }, m.name),
-                            if m.unresolved { "unresolved" } else { &m.phase },
-                            &remaining(m),
-                            &m.paid
-                        )
-                    ),
-                };
+                let text =
+                    match item {
+                        Row::Group(group, count) => format!(
+                            "{} {} {} ({count})",
+                            if i == view.index { ">" } else { " " },
+                            if view.collapsed.contains(group) {
+                                "+"
+                            } else {
+                                "-"
+                            },
+                            group.title()
+                        ),
+                        Row::Machine(m) => format!(
+                            "{} {}",
+                            if i == view.index { ">" } else { " " },
+                            row(
+                                &format!(
+                                    "  {}{}{}",
+                                    if m.provider_warning { "! " } else { "" },
+                                    m.experiment.as_ref().map_or(
+                                        String::new(),
+                                        |experiment| format!("[{}] ", experiment.role)
+                                    ),
+                                    m.name
+                                ),
+                                if m.unresolved { "unresolved" } else { &m.phase },
+                                &remaining(m),
+                                &m.paid
+                            )
+                        ),
+                    };
                 lines.push((
                     text,
                     if i == view.index {
                         3
-                    } else if matches!(item, Row::Project(..)) {
+                    } else if matches!(item, Row::Group(..)) {
                         1
                     } else {
                         0
@@ -583,6 +687,12 @@ fn render(
             ));
             lines.push((String::new(), 0));
             lines.push((m.capacity.clone(), 0));
+            if let Some(experiment) = &m.experiment {
+                lines.push((
+                    format!("Experiment {}   role {}", experiment.name, experiment.role),
+                    0,
+                ));
+            }
             lines.push((m.task_detail.clone(), 0));
             lines.push((format!("Started  {}", m.started), 0));
             lines.push((
@@ -608,7 +718,9 @@ fn render(
             ));
             lines.push((String::new(), 0));
             lines.push(("Transactions   USDC.e".into(), 1));
-            let count = height.saturating_sub(17).max(1);
+            let count = height
+                .saturating_sub(17 + usize::from(m.experiment.is_some()))
+                .max(1);
             for tx in m.transactions.iter().skip(view.offset).take(count) {
                 lines.push((
                     format!(
@@ -825,14 +937,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(rx) = &pending {
             match rx.receiver.try_recv() {
                 Ok(result) => {
-                    let previous_machine = selected(&data, &view).map(|m| m.name.clone());
+                    let previous_selection = selection(&data, &view);
                     match result {
                         Ok(mut new) => {
                             view.message = new.message.clone();
-                            if data.machines.is_empty() && !new.machines.is_empty() {
-                                view.collapsed =
-                                    new.machines.iter().map(|m| m.project.clone()).collect();
-                            }
                             if new.available.as_ref().is_none_or(|incoming| {
                                 data.available
                                     .as_ref()
@@ -845,11 +953,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 view.index =
                                     view.index.min(offers(&data, &view).len().saturating_sub(1));
                             } else {
-                                let rows = grouped(&data, &view);
-                                view.index = rows
-                                    .iter()
-                                    .position(|row| matches!(row, Row::Machine(m) if Some(&m.name) == previous_machine.as_ref()))
-                                    .unwrap_or(view.index.min(rows.len().saturating_sub(1)));
+                                restore_selection(&data, &mut view, previous_selection);
                                 view.offset = view.offset.min(
                                     selected(&data, &view)
                                         .map_or(0, |m| m.transactions.len().saturating_sub(1)),
@@ -1007,20 +1111,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let rows = grouped(&data, &view);
                     if matches!(key.code, KeyCode::Left | KeyCode::Char('h')) {
                         match rows.get(view.index) {
-                            Some(Row::Project(project, _)) => {
-                                view.collapsed.insert((*project).to_owned());
+                            Some(Row::Group(group, _)) => {
+                                view.collapsed.insert(group.clone());
                             }
                             Some(Row::Machine(m)) => {
-                                view.index = rows.iter().position(|row| matches!(row, Row::Project(project, _) if *project == m.project)).unwrap_or(view.index);
+                                let parent = group_key(m);
+                                view.index = rows
+                                    .iter()
+                                    .position(|row| matches!(row, Row::Group(group, _) if *group == parent))
+                                    .unwrap_or(view.index);
                             }
                             None => (),
                         }
                         continue;
                     }
                     if matches!(key.code, KeyCode::Right | KeyCode::Char('l'))
-                        && let Some(Row::Project(project, _)) = rows.get(view.index)
+                        && let Some(Row::Group(group, _)) = rows.get(view.index)
                     {
-                        if !view.collapsed.remove(*project) {
+                        if !view.collapsed.remove(group) {
                             view.index = (view.index + 1).min(rows.len().saturating_sub(1));
                         }
                         continue;
@@ -1187,10 +1295,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Enter => {
                         if !view.detail
-                            && let Some(Row::Project(project, _)) = rows.get(view.index)
+                            && let Some(Row::Group(group, _)) = rows.get(view.index)
                         {
-                            if !view.collapsed.remove(*project) {
-                                view.collapsed.insert((*project).to_owned());
+                            if !view.collapsed.remove(group) {
+                                view.collapsed.insert(group.clone());
                             }
                             continue;
                         }
@@ -1282,5 +1390,115 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("fission: {}", clip(&error.to_string(), 500));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn machine(
+        name: &str,
+        managed: bool,
+        finished: bool,
+        active: bool,
+        experiment: Option<(&str, &str)>,
+    ) -> Machine {
+        Machine {
+            name: name.into(),
+            active,
+            unresolved: !finished && !active,
+            phase: if finished { "succeeded" } else { "preparing" }.into(),
+            provider: "compute-mpp".into(),
+            provider_warning: false,
+            finished,
+            ssh: false,
+            requested: "2026-09-15T00:00:00Z".into(),
+            expiry: None,
+            estimated: false,
+            paid: "0.22".into(),
+            paid_units: Some("220000".into()),
+            capacity: "1 vCPU / 1 GiB RAM / 25 GiB disk".into(),
+            started: "2026-09-15 00:00 UTC".into(),
+            ended: "2026-09-15 01:00 UTC".into(),
+            cap: "0.25".into(),
+            quote: "0.22".into(),
+            exported: String::new(),
+            check_cap: "0".into(),
+            managed,
+            experiment: experiment.map(|(name, role)| Experiment {
+                name: name.into(),
+                role: role.into(),
+            }),
+            task_detail: String::new(),
+            transactions: Vec::new(),
+        }
+    }
+
+    fn snapshot(machines: Vec<Machine>) -> Snapshot {
+        Snapshot {
+            machines,
+            ..Snapshot::default()
+        }
+    }
+
+    #[test]
+    fn tasks_show_managed_and_nonclosed_records_and_group_experiments() {
+        let data = snapshot(vec![
+            machine("pair-tests", true, true, false, Some(("pair", "tests"))),
+            machine("pair-build", true, true, false, Some(("pair", "build"))),
+            machine("standalone", true, true, false, None),
+            machine("needs-review", false, false, false, None),
+            machine("old-workspace", false, true, false, None),
+        ]);
+        let view = View::default();
+
+        assert_eq!(machines(&data, &view).len(), 4);
+        let rows = grouped(&data, &view);
+        assert!(matches!(rows[0], Row::Group(GroupKey::NeedsReview, 1)));
+        assert!(matches!(rows[2], Row::Group(GroupKey::Experiment(ref name), 2) if name == "pair"));
+        assert!(matches!(rows[5], Row::Group(GroupKey::Managed, 1)));
+        assert!(!rows.iter().any(|row| {
+            matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
+        }));
+    }
+
+    #[test]
+    fn all_records_exposes_retained_workspaces_but_starts_them_collapsed() {
+        let data = snapshot(vec![
+            machine("managed", true, true, false, None),
+            machine("old-workspace", false, true, false, None),
+        ]);
+        let mut view = View {
+            filter: 2,
+            ..View::default()
+        };
+
+        assert!(view.collapsed.contains(&GroupKey::Retained));
+        assert!(!grouped(&data, &view).iter().any(|row| {
+            matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
+        }));
+        view.collapsed.remove(&GroupKey::Retained);
+        assert!(grouped(&data, &view).iter().any(|row| {
+            matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
+        }));
+    }
+
+    #[test]
+    fn refresh_never_retargets_hidden_machine_details() {
+        let data = snapshot(vec![machine("needs-review", false, false, false, None)]);
+        let mut view = View {
+            index: 1,
+            detail: true,
+            ..View::default()
+        };
+        let previous = selection(&data, &view);
+        assert_eq!(previous, Some(Selection::Machine("needs-review".into())));
+
+        let closed = snapshot(vec![machine("needs-review", false, true, false, None)]);
+        restore_selection(&closed, &mut view, previous);
+        assert!(!view.detail);
+        assert_eq!(view.offset, 0);
+        assert!(selected(&closed, &view).is_none());
     }
 }

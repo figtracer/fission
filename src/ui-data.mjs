@@ -51,9 +51,10 @@ async function main() {
     const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
     const unresolved = state.phase.endsWith("_unknown");
     return {
-      name: state.name, project: state.project || state.source?.url?.split("/").at(-1)?.replace(/\.git$/, "") || state.recipe.name.replace(/-(source|synced|node)$/, ""),
+      name: state.name,
       phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
-      managed: Boolean(task), taskDetail: task ? `${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
+      managed: Boolean(task), experiment: task?.experiment || null,
+      taskDetail: task ? `${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
       active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
       ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
       requested: state.requestedAt || "", expiry: Math.floor((state.task?.deadline || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,
