@@ -75,7 +75,7 @@ export async function report(name, id, options = {}) {
       verifiedOutflow: unknown ? null : amount(transactions.reduce((sum, transaction) => sum + units(transaction.paid), 0n)),
       incomplete: unknown, refreshError: payments.refreshError || null, transactions },
     assessment: notes, log: null,
-    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
+    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
   };
   const parent = resolve(options.output || "fission", name);
   await mkdir(parent, { recursive: true });

@@ -4,7 +4,7 @@ import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
-import { request, recoverCreate, execute, validRemoteId } from "./provider.mjs";
+import { request, recoverCreate, execute, validRemoteId, CreateNotPurchased } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
@@ -112,6 +112,15 @@ export async function start(name, prepared) {
         state.phase = "not_submitted";
         state.preparationError = error.message;
         await save(state);
+      } else if (error instanceof CreateNotPurchased) {
+        state.phase = "not_purchased";
+        state.preparationError = error.message;
+        if (state.task) {
+          state.task.outcome = "not_purchased";
+          state.task.lastError = error.message;
+        }
+        await save(state);
+        return state;
       }
       throw error;
     }
@@ -237,7 +246,18 @@ export async function reconcile(name) {
   return locked(name, async () => {
     const state = await load(name);
     if (!state.remoteId) {
-      state.remoteId = await recoverCreate(state);
+      try { state.remoteId = await recoverCreate(state); }
+      catch (error) {
+        if (!(error instanceof CreateNotPurchased)) throw error;
+        state.phase = "not_purchased";
+        state.preparationError = error.message;
+        if (state.task) {
+          state.task.outcome = "not_purchased";
+          state.task.lastError = error.message;
+        }
+        await save(state);
+        return state;
+      }
       if (!state.remoteId)
         throw new Error(`No recoverable response for request ${state.createRequest}. Do not create again. Preserve ${directory(name)} for provider/payment reconciliation.`);
       state.phase = "preparation_pending";

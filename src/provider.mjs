@@ -3,9 +3,9 @@ import { existsSync } from "node:fs";
 import { readFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
-import { units, reserve } from "./budget.mjs";
+import { units, reserve, releaseRejectedCreate } from "./budget.mjs";
 
 const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
 const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
@@ -31,6 +31,34 @@ function provisioningRecovery(response) {
     response.details.cleanup_error === null && Number.isFinite(response.details.credited) && response.details.credited > 0
     ? " Provider reports automatic destruction and account credit; credit access and payment recovery remain unverified."
     : "";
+}
+
+const rejectedCreate = (state, operation, result, responseText, metaText) => state.provider === "compute-mpp" && operation === "create" &&
+  result.code === 4 && !result.interruption && !result.stdout.trim() && !responseText && !metaText &&
+  /^code: E_PAYMENT$/m.test(result.stderr) && /^retryable: false$/m.test(result.stderr) &&
+  result.stderr.includes("Account keychain error: SpendingLimitExceeded(SpendingLimitExceeded)") &&
+  result.stderr.toLowerCase().includes(`delegated key may not cover payment token ${paymentTerms.token}`);
+
+export class CreateNotPurchased extends Error {
+  constructor(requestId) {
+    super(`Payment credential creation was rejected by its spending limit for request ${requestId}; no paid create was dispatched.`);
+    this.requestId = requestId;
+  }
+}
+
+async function finalizeRejectedCreate(state, id, error) {
+  const path = join(directory(state.name), "requests", `${id}.resolution.json`);
+  let resolution = await readJSON(path);
+  if (!resolution) {
+    resolution = { schemaVersion: 1, requestId: id, classification: "tempo-charge-spending-limit-v1",
+      recordedAt: new Date().toISOString(), errorSha256: createHash("sha256").update(JSON.stringify(error)).digest("hex"),
+      note: "Payment credential creation rejected before paid provider dispatch. Onchain fee outflow remains separately unverified." };
+    await writeJSON(path, resolution);
+  }
+  if (resolution.schemaVersion !== 1 || resolution.requestId !== id || resolution.classification !== "tempo-charge-spending-limit-v1")
+    throw new Error("Create request has an unrecognized resolution record.");
+  await releaseRejectedCreate(state, id, resolution);
+  throw new CreateNotPurchased(id);
 }
 
 export function runProcess(command, args, options = {}) {
@@ -95,11 +123,14 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   const url = state.provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
   const result = await runProcess(tempo, ["request", ...paymentOptions, "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
+  const metaText = await readFile(metaPath, "utf8");
   let response;
   try { response = JSON.parse(responseText); } catch { /* Preserve the raw response for recovery. */ }
   await writeJSON(intent, { id, operation, body, maximum, state: result.code === 0 ? "received" : "unknown", exitCode: result.code, interruption: result.interruption, finishedAt: new Date().toISOString() });
   if (result.code !== 0 || !response) {
-    await writeJSON(join(dir, `${id}.error.json`), { code: result.code, stderr: result.stderr, stdout: result.stdout });
+    const error = { code: result.code, stderr: result.stderr, stdout: result.stdout };
+    await writeJSON(join(dir, `${id}.error.json`), error);
+    if (rejectedCreate(state, operation, result, responseText, metaText)) await finalizeRejectedCreate(state, id, error);
     if (!result.interruption) await recordProviderFailure(state.provider);
     const recovery = state.provider === "compute-mpp" && operation === "create" ? provisioningRecovery(response) : "";
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}).${recovery} Saved response: ${responsePath}. Do not repeat the payment.`);
@@ -116,9 +147,16 @@ export async function request(state, operation, body, maximum, id = randomUUID()
 }
 
 export async function recoverCreate(state) {
-  const path = join(directory(state.name), "requests", `${state.createRequest}.response.json`);
+  const dir = join(directory(state.name), "requests"), id = state.createRequest;
+  const path = join(dir, `${id}.response.json`);
   let response;
   try { response = await readJSON(path); } catch { return null; }
+  if (!response) {
+    const intent = await readJSON(join(dir, `${id}.json`)), error = await readJSON(join(dir, `${id}.error.json`));
+    const responseText = await readFile(path, "utf8"), metaText = await readFile(join(dir, `${id}.meta.json`), "utf8");
+    const result = { code: intent?.exitCode, interruption: intent?.interruption, stdout: error?.stdout || "", stderr: error?.stderr || "" };
+    if (error && rejectedCreate(state, "create", result, responseText, metaText)) await finalizeRejectedCreate(state, id, error);
+  }
   if (providerId(state.provider) === "compute-mpp" && response) {
     const recovery = provisioningRecovery(response);
     if (recovery) throw new Error(`Creation remains unresolved.${recovery} Saved response: ${path}. Do not repeat the payment.`);

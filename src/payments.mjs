@@ -52,8 +52,13 @@ export async function spending({ refresh = false, signal } = {}) {
     let files;
     try { files = await readdir(dir); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
     for (const file of files.filter((file) => /^[a-f0-9-]{36}\.json$/.test(file))) {
-      let intent, meta;
-      try { intent = await readJSON(join(dir, file)); meta = await readJSON(join(dir, file.replace(".json", ".meta.json"))); }
+      let intent, meta, resolution;
+      try {
+        intent = await readJSON(join(dir, file));
+        resolution = await readJSON(join(dir, file.replace(".json", ".resolution.json")));
+        if (resolution?.schemaVersion === 1 && resolution.requestId === intent.id && resolution.classification === "tempo-charge-spending-limit-v1") continue;
+        meta = await readJSON(join(dir, file.replace(".json", ".meta.json")));
+      }
       catch { unreadableRecords++; unknownWorkspaces.add(state.name); continue; }
       if (intent.maximum === "0") continue;
       const receipt = paymentReference(meta);

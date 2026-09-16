@@ -192,7 +192,7 @@ async function createMachines(name, options) {
 export function nextTaskStep(state, jobs, now = Date.now()) {
   const task = state.task;
   if (!task) return "legacy";
-  if (terminal(state) || state.phase === "not_submitted") return task.report ? "done" : "report";
+  if (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) return task.report ? "done" : "report";
   if (!state.remoteId) return "reconcile";
   if (state.phase === "termination_unknown") return "confirm";
   const cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - task.timing.cleanupSeconds * 1000;
@@ -230,7 +230,7 @@ export async function taskStatus(name, expectedExperiment) {
     resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
-    cleanup: { phase: state.phase, confirmed: terminal(state) || state.phase === "not_submitted", observedAt: state.closedAt || null },
+    cleanup: { phase: state.phase, confirmed: terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || null },
     report: task.report?.report || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
