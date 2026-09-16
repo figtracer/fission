@@ -22,7 +22,8 @@ function summary(state) {
     providerExpiresAt: state.providerExpiresAt,
     closedAt: state.closedAt,
     remoteStatus: state.remoteStatus, providerStatus: state.providerStatus, resizePending: state.resizePending, observedResources: state.observedResources, exportedTo: state.exportedTo,
-    lease: state.lease, leasePhase: state.leasePhase, preparationAcceptance: state.preparationAcceptance, guestResources: state.guestResources,
+    lease: state.lease, leasePhase: state.leasePhase, preparationAcceptance: state.preparationAcceptance,
+    accessObservations: state.accessObservations, initialization: state.initialization, guestResources: state.guestResources,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, repairJob: state.repairJob, source: state.source, planId: state.id,
   };
@@ -70,6 +71,7 @@ async function main() {
     manifest: { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
+    "no-resize": { type: "boolean" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },

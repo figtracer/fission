@@ -47,7 +47,11 @@ fission status check-a --wait 10m
 
 Automatic selection retains compatible alternatives from the quoted shortlist, cheapest first. Before payment, a failed quote or changed capacity can select another retained machine within the task creation cap, preserving lifecycle headroom, resources, region and duration. There is no percentage premium limit. The preview exposes alternatives and failures; an uncertain purchase never triggers a second rental. Current VM offers still share one gateway, so this does not yet protect against a gateway-wide outage.
 
+Use `--machine ID` when a reproducible comparison or qualification run requires one exact catalog machine. Exact selection has no alternative-machine fallback.
+
 Bare `fission` opens the Rust task dashboard. Click a task to inspect it. Inside `fission advanced tmux`, **SSH terminal** opens a small popup while the dashboard keeps refreshing; a plain dashboard uses fullscreen SSH and resumes refresh after the shell exits. Stopping requires a second confirmation: provider cleanup may lose guest files that were not collected, but local task/experiment folders, collected evidence and reports, and caches already saved by successful builds remain. Other experiment machines keep running.
+
+Tasks appear in outcome order: **Succeeded**, **Active**, **Unsuccessful**, then dimmed **Unresolved**. Experiments stay together under their combined outcome; success with unconfirmed cleanup stays unresolved. **Closed history** is collapsed under all records. `[advanced]` identifies old unfinished workspaces without a task supervisor; normal runs need no “managed” label. List order is presentation, not spending or cleanup authority.
 
 Press `q` twice consecutively to quit the dashboard, not the task. The first press shows a confirmation cue; another key or an actionable mouse event cancels it. Ready and finished transitions emit a dashboard-local bell and visible cue, not an external notification.
 
@@ -130,17 +134,6 @@ Preview validates every role, quotes every machine, and checks the summed alloca
 | `fission advanced COMMAND` | Explicit low-level recovery and retained-data operations |
 
 All normal command output is JSON. Flags before `--` configure Fission; everything after `--` is workload argv and is passed without shell reinterpretation. `FISSION_HOME` selects the durable local state, ledger, receipts, and default cache. Never point a new run at a disposable state directory to bypass retained allocations or unresolved requests.
-
-## Limits and evidence boundaries
-
-- The implemented purchase path is MPP/Tempo-paid Linux x86_64 compute with a configured local Tempo CLI wallet. x402 is permitted, but no x402 VM gateway is integrated yet; [gateway checks](docs/rental.md#gateway-qualification) distinguish discovery from usable lifecycle support. Fission does not refill, swap, bridge, or on-ramp funds.
-- Foundry and development-chain results are bounded model or local-chain evidence, not public-network consensus. Fork RPC state is trusted input.
-- Reth `synced` currently supports Ethereum with paired Lighthouse. Base-Reth and Reth-BSC full-node variants are unavailable.
-- Source compilation proves buildability, not runtime correctness. A Cargo command that matches zero tests is not a successful validation.
-- Total duration includes provisioning, preparation, work, and cleanup. Historical timings in previews are dated observations with uncertainty, not universal guarantees.
-- Work success, artifact collection, report generation, and provider destruction are separate outcomes. Local reports and caches survive VM deletion but are not cloud backups.
-- A local machine that sleeps can stop observing, while guest deadlines and provider expiry continue. Resume does not rewind missed work or extend authorization.
-- Examples are not spending authorization. Review the live quote and retained budget, and use `--approve` only within the user's explicit amount and duration.
 
 Read [harness selection and source/cache behavior](docs/harnesses.md), [rental and recovery safety](docs/rental.md), and the [synced Ethereum guide](docs/reth.md) before those workflows.
 

@@ -170,7 +170,10 @@ impl Default for View {
             available: false,
             prices: PriceView::WithinBudget,
             region: 0,
-            collapsed: BTreeSet::from([GroupKey::Retained]),
+            collapsed: BTreeSet::from([GroupKey {
+                outcome: Outcome::Closed,
+                experiment: None,
+            }]),
         }
     }
 }
@@ -253,34 +256,62 @@ fn machines<'a>(data: &'a Snapshot, view: &View) -> Vec<&'a Machine> {
     rows
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum GroupKey {
-    NeedsReview,
-    Experiment(String),
-    Managed,
-    Retained,
+// Display priority: successful work first; uncertain lifecycle records stay visible below it.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Outcome {
+    Succeeded,
+    Active,
+    Unsuccessful,
+    Unresolved,
+    Closed,
 }
 
-impl GroupKey {
-    fn title(&self) -> String {
+impl Outcome {
+    fn title(self) -> &'static str {
         match self {
-            Self::NeedsReview => "Needs review".into(),
-            Self::Experiment(name) => format!("Experiment: {name}"),
-            Self::Managed => "Managed tasks".into(),
-            Self::Retained => "Retained workspaces".into(),
+            Self::Succeeded => "Succeeded",
+            Self::Active => "Active",
+            Self::Unsuccessful => "Unsuccessful",
+            Self::Unresolved => "Unresolved",
+            Self::Closed => "Closed history",
+        }
+    }
+
+    fn combine(self, other: Self) -> Self {
+        if self == Self::Active || other == Self::Active {
+            Self::Active
+        } else {
+            self.max(other)
         }
     }
 }
 
-fn group_key(machine: &Machine) -> GroupKey {
-    if let Some(experiment) = machine.experiment.as_ref().filter(|_| machine.managed) {
-        GroupKey::Experiment(experiment.name.clone())
-    } else if machine.managed {
-        GroupKey::Managed
+fn outcome(machine: &Machine) -> Outcome {
+    if machine.unresolved {
+        Outcome::Unresolved
     } else if !machine.finished {
-        GroupKey::NeedsReview
+        Outcome::Active
+    } else if !machine.managed {
+        Outcome::Closed
+    } else if machine.phase == "succeeded" {
+        Outcome::Succeeded
     } else {
-        GroupKey::Retained
+        Outcome::Unsuccessful
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct GroupKey {
+    outcome: Outcome,
+    experiment: Option<String>,
+}
+
+impl GroupKey {
+    fn title(&self) -> String {
+        match &self.experiment {
+            Some(name) => format!("{} - experiment {name}", self.outcome.title()),
+            None => self.outcome.title().into(),
+        }
     }
 }
 
@@ -290,9 +321,26 @@ enum Row<'a> {
 }
 
 fn grouped<'a>(data: &'a Snapshot, view: &View) -> Vec<Row<'a>> {
+    let visible = machines(data, view);
+    let mut experiments: BTreeMap<&str, Outcome> = BTreeMap::new();
+    for machine in &visible {
+        if let Some(experiment) = &machine.experiment {
+            experiments
+                .entry(&experiment.name)
+                .and_modify(|status| *status = status.combine(outcome(machine)))
+                .or_insert_with(|| outcome(machine));
+        }
+    }
     let mut groups: BTreeMap<GroupKey, Vec<&Machine>> = BTreeMap::new();
-    for machine in machines(data, view) {
-        groups.entry(group_key(machine)).or_default().push(machine);
+    for machine in visible {
+        let group = GroupKey {
+            outcome: machine
+                .experiment
+                .as_ref()
+                .map_or_else(|| outcome(machine), |e| experiments[e.name.as_str()]),
+            experiment: machine.experiment.as_ref().map(|e| e.name.clone()),
+        };
+        groups.entry(group).or_default().push(machine);
     }
     let mut rows = Vec::new();
     for (group, machines) in groups {
@@ -340,6 +388,24 @@ fn selected<'a>(data: &'a Snapshot, view: &View) -> Option<&'a Machine> {
     }
 }
 
+fn table_phase(m: &Machine) -> &str {
+    if m.phase == "deadline_exceeded" {
+        "expired"
+    } else if m.unresolved {
+        "unresolved"
+    } else {
+        &m.phase
+    }
+}
+
+fn expiry_passed(m: &Machine) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    m.expiry.is_some_and(|expiry| expiry <= now)
+}
+
 fn remaining(m: &Machine) -> String {
     if m.finished {
         return if m.phase == "not_submitted" {
@@ -352,13 +418,13 @@ fn remaining(m: &Machine) -> String {
     let Some(expiry) = m.expiry else {
         return "unknown".into();
     };
+    if expiry_passed(m) {
+        return "expired".into();
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if expiry <= now {
-        return "check expiry".into();
-    }
     let secs = expiry - now;
     format!(
         "{}h {:02}m{}",
@@ -769,20 +835,17 @@ fn render(
                 ));
             }
         } else if !view.detail {
-            let managed = data.machines.iter().filter(|m| m.managed).count();
-            let needs_review = data
-                .machines
-                .iter()
-                .filter(|m| !m.managed && !m.finished)
-                .count();
-            let retained = data.machines.len().saturating_sub(managed + needs_review);
+            let outcome_count = |status| {
+                data.machines
+                    .iter()
+                    .filter(|m| outcome(m) == status)
+                    .count()
+            };
             lines.push((
                 format!(
-                    "Tasks   {} active   {} managed   {} review   {} retained",
-                    data.machines.iter().filter(|m| m.active).count(),
-                    managed,
-                    needs_review,
-                    retained
+                    "Tasks   {} succeeded   {} active",
+                    outcome_count(Outcome::Succeeded),
+                    outcome_count(Outcome::Active)
                 ),
                 1,
             ));
@@ -811,40 +874,46 @@ fn render(
                 .skip(view.top)
                 .take(count)
             {
-                let text =
-                    match item {
-                        Row::Group(group, count) => format!(
-                            "{} {} {} ({count})",
-                            if i == view.index { ">" } else { " " },
-                            if view.collapsed.contains(group) {
-                                "+"
-                            } else {
-                                "-"
-                            },
-                            group.title()
-                        ),
-                        Row::Machine(m) => format!(
-                            "{} {}",
-                            if i == view.index { ">" } else { " " },
-                            row(
-                                &format!(
-                                    "  {}{}",
-                                    m.experiment.as_ref().map_or(
-                                        String::new(),
-                                        |experiment| format!("[{}] ", experiment.role)
-                                    ),
-                                    m.name
+                let text = match item {
+                    Row::Group(group, count) => format!(
+                        "{} {} {} ({count})",
+                        if i == view.index { ">" } else { " " },
+                        if view.collapsed.contains(group) {
+                            "+"
+                        } else {
+                            "-"
+                        },
+                        group.title()
+                    ),
+                    Row::Machine(m) => format!(
+                        "{} {}",
+                        if i == view.index { ">" } else { " " },
+                        row(
+                            &format!(
+                                "  {}{}",
+                                m.experiment.as_ref().map_or(
+                                    if !m.managed && !m.finished {
+                                        "[advanced] ".into()
+                                    } else {
+                                        String::new()
+                                    },
+                                    |experiment| format!("[{}] ", experiment.role)
                                 ),
-                                if m.unresolved { "unresolved" } else { &m.phase },
-                                &remaining(m),
-                                &m.paid
-                            )
-                        ),
-                    };
+                                m.name
+                            ),
+                            table_phase(m),
+                            &remaining(m),
+                            &m.paid
+                        )
+                    ),
+                };
                 lines.push((
                     text,
                     if i == view.index {
                         3
+                    } else if matches!(item, Row::Machine(m) if m.unresolved)
+                        || matches!(item, Row::Group(group, _) if group.outcome >= Outcome::Unresolved) {
+                        2
                     } else if matches!(item, Row::Group(..)) {
                         1
                     } else {
@@ -873,6 +942,14 @@ fn render(
                 ));
             }
             lines.push((m.task_detail.clone(), 0));
+            if m.phase == "deadline_exceeded" {
+                lines.push(("Task deadline expired before successful work.".into(), 2));
+            } else if !m.finished && expiry_passed(m) {
+                lines.push((
+                    "Recorded expiry passed; refresh status to confirm cleanup.".into(),
+                    2,
+                ));
+            }
             lines.push((format!("Started  {}", m.started), 0));
             lines.push((
                 format!(
@@ -1410,11 +1487,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             Some(Row::Group(group, _)) => {
                                 view.collapsed.insert(group.clone());
                             }
-                            Some(Row::Machine(m)) => {
-                                let parent = group_key(m);
+                            Some(Row::Machine(_)) => {
                                 view.index = rows
                                     .iter()
-                                    .position(|row| matches!(row, Row::Group(group, _) if *group == parent))
+                                    .take(view.index)
+                                    .rposition(|row| matches!(row, Row::Group(..)))
                                     .unwrap_or(view.index);
                             }
                             None => (),
@@ -1785,6 +1862,20 @@ mod tests {
     }
 
     #[test]
+    fn expired_rows_stay_compact_while_details_retain_the_reason() {
+        let mut deadline = machine("deadline", true, true, false, None);
+        deadline.phase = "deadline_exceeded".into();
+        assert_eq!(table_phase(&deadline), "expired");
+        assert_eq!(remaining(&deadline), "closed");
+
+        let mut uncertain = machine("uncertain", false, false, false, None);
+        uncertain.expiry = Some(0);
+        assert_eq!(table_phase(&uncertain), "unresolved");
+        assert!(expiry_passed(&uncertain));
+        assert_eq!(remaining(&uncertain), "expired");
+    }
+
+    #[test]
     fn gateway_view_never_exposes_quotable_offers_and_works_without_catalog() {
         let mut data: Snapshot = serde_json::from_value(serde_json::json!({
             "machines": [], "spending": "", "message": "",
@@ -1823,9 +1914,29 @@ mod tests {
 
         assert_eq!(machines(&data, &view).len(), 4);
         let rows = grouped(&data, &view);
-        assert!(matches!(rows[0], Row::Group(GroupKey::NeedsReview, 1)));
-        assert!(matches!(rows[2], Row::Group(GroupKey::Experiment(ref name), 2) if name == "pair"));
-        assert!(matches!(rows[5], Row::Group(GroupKey::Managed, 1)));
+        assert!(matches!(
+            rows[0],
+            Row::Group(
+                GroupKey {
+                    outcome: Outcome::Succeeded,
+                    experiment: None
+                },
+                1
+            )
+        ));
+        assert!(
+            matches!(rows[2], Row::Group(GroupKey { outcome: Outcome::Succeeded, experiment: Some(ref name) }, 2) if name == "pair")
+        );
+        assert!(matches!(
+            rows[5],
+            Row::Group(
+                GroupKey {
+                    outcome: Outcome::Unresolved,
+                    experiment: None
+                },
+                1
+            )
+        ));
         assert!(!rows.iter().any(|row| {
             matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
         }));
@@ -1842,14 +1953,108 @@ mod tests {
             ..View::default()
         };
 
-        assert!(view.collapsed.contains(&GroupKey::Retained));
+        let closed = GroupKey {
+            outcome: Outcome::Closed,
+            experiment: None,
+        };
+        assert!(view.collapsed.contains(&closed));
         assert!(!grouped(&data, &view).iter().any(|row| {
             matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
         }));
-        view.collapsed.remove(&GroupKey::Retained);
+        view.collapsed.remove(&closed);
         assert!(grouped(&data, &view).iter().any(|row| {
             matches!(row, Row::Machine(machine) if machine.name == "old-workspace")
         }));
+    }
+
+    #[test]
+    fn outcome_priority_keeps_uncertain_success_out_of_succeeded() {
+        let mut cancelled = machine("cancelled", true, true, false, None);
+        cancelled.phase = "cancelled".into();
+        let mut uncertain = machine("success-with-unknown-cleanup", true, false, false, None);
+        uncertain.phase = "succeeded".into();
+        let data = snapshot(vec![
+            machine("legacy", false, true, false, None),
+            uncertain,
+            cancelled,
+            machine("legacy-unknown", false, false, false, None),
+            machine("running", true, false, true, None),
+            machine("success", true, true, false, None),
+        ]);
+        let rows = grouped(
+            &data,
+            &View {
+                filter: 2,
+                ..View::default()
+            },
+        );
+        let groups: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Group(group, count) => Some((group.outcome, *count)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            groups,
+            vec![
+                (Outcome::Succeeded, 1),
+                (Outcome::Active, 1),
+                (Outcome::Unsuccessful, 1),
+                (Outcome::Unresolved, 2),
+                (Outcome::Closed, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn experiment_outcomes_stay_together_and_refresh_follows_machine_identity() {
+        let mut view = View {
+            index: 4,
+            detail: true,
+            ..View::default()
+        };
+        let previous = Some(Selection::Machine("pair-tests".into()));
+        for (finished, active, unresolved, phase, expected) in [
+            (true, false, false, "succeeded", Outcome::Succeeded),
+            (false, true, false, "execute", Outcome::Active),
+            (true, false, false, "cancelled", Outcome::Unsuccessful),
+            (false, false, true, "succeeded", Outcome::Unresolved),
+        ] {
+            let mut partner = machine(
+                "pair-tests",
+                true,
+                finished,
+                active,
+                Some(("pair", "tests")),
+            );
+            partner.unresolved = unresolved;
+            partner.phase = phase.into();
+            let data = snapshot(vec![
+                machine("pair-build", true, true, false, Some(("pair", "build"))),
+                partner,
+                machine("standalone", true, true, false, None),
+                machine("running", true, false, true, None),
+            ]);
+            let rows = grouped(&data, &view);
+            assert!(rows.iter().any(|row| matches!(row, Row::Group(group, 2) if group.outcome == expected && group.experiment.as_deref() == Some("pair"))));
+            assert_eq!(rows.len(), 7);
+            restore_selection(&data, &mut view, previous.clone());
+            assert!(view.detail);
+            assert_eq!(selected(&data, &view).unwrap().name, "pair-tests");
+            assert_eq!(
+                view.index,
+                if expected == Outcome::Succeeded { 4 } else { 6 }
+            );
+        }
+        assert_eq!(
+            Outcome::Active.combine(Outcome::Unresolved),
+            Outcome::Active
+        );
+        assert_eq!(
+            Outcome::Unresolved.combine(Outcome::Active),
+            Outcome::Active
+        );
     }
 
     #[test]

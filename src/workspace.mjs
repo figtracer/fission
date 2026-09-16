@@ -11,6 +11,11 @@ import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 export const operationCap = "0.0001";
 const recipeDirectory = fileURLToPath(new URL("../recipes/", import.meta.url));
 export const terminal = (state) => ["terminated", "expired"].includes(state.phase);
+const preparationDeadline = (state) => state.task ? Math.min(
+  Date.parse(state.requestedAt) + (state.task.timing.provisioningSeconds + state.task.timing.preparationSeconds) * 1000,
+  state.task.deadline - state.task.timing.cleanupSeconds * 1000,
+  Date.parse(state.providerExpiresAt || state.deadlineEstimate) - state.task.timing.cleanupSeconds * 1000,
+) : undefined;
 export const sourceRecipes = {
   "foundry-source": ["forge", "cast", "anvil", "chisel"],
   "reth-source": ["reth"],
@@ -127,13 +132,17 @@ async function prepareState(state) {
   if (!state.asyncPreparation || !state.remoteId || !["preparing", "preparation_pending"].includes(state.phase))
     throw new Error("This workspace is not awaiting preparation.");
   if (state.bootstrapJob) throw new Error("Bootstrap already recorded. Observe its existing job; do not launch it again.");
+  const deadline = preparationDeadline(state);
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
   if (state.provider === "compute-mpp") {
     const compute = await import("./compute.mjs");
     if (state.lease) {
-      if (!await compute.prepareLease(state)) return state;
+      if (!await compute.prepareLease(state, { deadline })) return state;
     } else {
-      await compute.prepareAccess(state);
-      await compute.verifyGuest(state);
+      await compute.prepareAccess(state, { deadline });
+      await compute.verifyInitialization(state, "direct", { deadline });
+      await compute.verifyGuest(state, { deadline });
     }
   }
   const { launch } = await import("./jobs.mjs");
@@ -154,11 +163,17 @@ pathlib.Path('/workspace/.fission/deadline.json').write_text(json.dumps(record))
 print(json.dumps(record))`, String(state.task.deadline / 1000)]);
   // The job identity is persisted before launch. An ambiguous result is observed,
   // never automatically replayed or mistaken for failed preparation.
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
+  const seconds = state.task
+    ? Math.min(state.durationSeconds, state.task.timing.preparationSeconds, Math.floor((deadline - Date.now()) / 1000))
+    : state.durationSeconds;
+  if (seconds <= 0) throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
   state.bootstrapJob = "bootstrap";
   state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log",
     ...(state.task ? ["/workspace/.fission/deadline.json"] : [])])] };
   await save(state);
-  await launch(state, "bootstrap", commands, state.task ? Math.min(state.durationSeconds, state.task.timing.preparationSeconds) : state.durationSeconds, state.recipe.readiness || []);
+  await launch(state, "bootstrap", commands, seconds, state.recipe.readiness || []);
   return state;
 }
 

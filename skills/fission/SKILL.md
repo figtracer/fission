@@ -34,6 +34,8 @@ Run without `--approve` first. Inspect the quote, allocation, machine resources,
 
 Inspect the preview's fallback candidates and creation cap. Automatic selection prefers compatible quoted alternatives within the task budget, without a percentage premium rule; resources, region, duration and lifecycle headroom remain fixed. Fallback stops at purchase intent: uncertain creation never permits another rental. All currently eligible VM offers share one gateway. MPP and x402 are permitted, but only MPP/Tempo purchases are implemented; read `help rental` for gateway qualification rather than treating catalog presence as lifecycle support.
 
+Use `--no-resize` only when the task explicitly requires direct provisioning. It prepays the selected VM for at least one day but preserves the requested shorter task/guest deadline and early cleanup; every previewed fallback must also be direct.
+
 For test/build mode provide public `--repo` and full-SHA `--ref`; use `--patch` for the one-time source patch. Use repeatable `--input FILE[=/workspace/path]` for workload files and `--artifact /workspace/file` for outputs. Assert that intended tests actually ran; a zero-test Cargo result is not validation.
 
 Inspect the preview's local cache check before renting. Clean builds can reuse exact-identity release binaries and save them after evidence collection; this is not a Cargo test/incremental cache. Identity mismatch falls back to compilation. Keep the cold preparation allowance until comparable timing establishes otherwise.
@@ -49,6 +51,10 @@ fission stop NAME              # early cancellation and cleanup
 ```
 
 Waiting or Ctrl-C does not stop the guest. Resume never authorizes a replacement purchase or job. Continue observing cleanup; unknown, timeout, and provider 404 are not confirmed destruction. Do not use `fission advanced` to mutate a live managed task.
+
+For VM readiness failures, inspect the retained access observations, initialization evidence, and request journal. A resize is usable only after healthy cloud-init on the starter and target and guest-observed selected CPU, nominal RAM class, and underlying root disk. Provider `active`, target plan fields, `resize_pending: false`, or an IP alone is not convergence; the gateway exposes no provider upgrade-job state. Readiness retries share the original preparation cutoff and may never delay reserved cleanup; do not weaken host-key checks, replay resize, or replace the VM automatically.
+
+Dashboard groups are Succeeded, Active, Unsuccessful, Unresolved, then Closed history under all records. Experiments stay together; any active member keeps the group active, otherwise its least-successful member determines the group. Success with unconfirmed cleanup remains Unresolved. Dimmed rows are still unresolved liabilities. `[advanced]` marks unfinished legacy workspaces without a task supervisor; use the advanced recovery path only for those records, never to bypass a live task's owner. Use status/report evidence, not visual priority, to decide completion.
 
 Interpret stage-specific evidence:
 

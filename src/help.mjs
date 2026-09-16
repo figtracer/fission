@@ -23,6 +23,8 @@ Options:
   --artifact /workspace/F Collect an output file, repeatable (not a database)
   --cwd DIR               Guest cwd; default /workspace/source with repo, else /workspace
   --cpu N --memory GiB --disk GiB  Raise harness resource floors
+  --machine ID             Require one exact catalog machine; disables fallback
+  --no-resize             Buy the selected VM directly; short tasks still prepay one day
   --prepare-duration D    Raise the preparation allowance for this task
   --output DIR            Local timestamped reports (default ./fission)
 
@@ -44,6 +46,11 @@ TOTAL includes provisioning + preparation + WORK + cleanup. Default allowances:
 They are planning policy based on dated observations, not performance guarantees.
 Preview includes the evidence and uncertainty. Short plans reject before spending.
 The prepaid lease can outlive TOTAL; no extra execution is authorized by credit.
+--no-resize preserves TOTAL and its guest deadline while bypassing starter migration.
+Resizable short leases wait for healthy cloud-init before migration, then require
+the trusted guest—not provider plan fields—to show the selected CPU, RAM, root
+disk, and healthy initialization. The gateway exposes no provider upgrade-job ID;
+an accepted resize remains unfinished until guest verification succeeds.
 
 Example (amount/duration must be authorized):
   fission run check-a --harness foundry --budget 0.50 --duration 2h \\
@@ -134,7 +141,23 @@ FISSION_HOME selects the existing durable state and ledger.`;
   if (key === "status") return `fission status — ${status}`;
   if (key === "budget") return `fission budget — ${budget}`;
   if (key === "stop") return "fission stop — Cancel the managed task and collect available evidence before teardown.\n\nUsage: fission stop NAME\n\nReturns recorded cancellation intent; use status NAME --wait DURATION to confirm\ncleanup. Repeating stop observes the same task, not a second purchase or DELETE.";
-  if (key === "ui") return "fission — Rust task dashboard.\n\nUsage: fission\n\nRequires an interactive terminal. Press q twice consecutively to exit the dashboard, not the task. Another key or actionable mouse event cancels the first q.\n\nAvailable: b cycles within-budget VM offers, all VM prices, and read-only Gateways. Only usable gateways appear; details show the compute operator, pricing units and supported scope. j/k scrolls details. VM offer details request fresh quotes without payment. See help rental for unavailable candidates.";
+  if (key === "ui") return `fission — Rust task dashboard.
+
+Usage: fission
+
+Tasks: Succeeded, Active, Unsuccessful, Unresolved, then Closed history under all records.
+Experiments stay together: active members keep the group active; otherwise its
+least-successful member determines the group. Unresolved creation/cleanup is not
+confirmed destruction, even after successful work. These rows are dimmed, not hidden.
+[advanced] marks unfinished legacy workspaces without a task supervisor.
+
+Requires an interactive terminal. Press q twice consecutively to exit the dashboard,
+not the task. Another key or actionable mouse event cancels the first q.
+
+Available: b cycles within-budget VM offers, all VM prices, and read-only Gateways.
+Only usable gateways appear; details show the compute operator, pricing units and
+supported scope. j/k scrolls details. VM offer details request fresh quotes without
+payment. See help rental for unavailable candidates.`;
   if (key === "advanced") return `Secondary recovery interface; not the normal task workflow.\n\nUsage: fission advanced COMMAND ...\n\n${Object.keys(advanced).filter((key) => !key.includes(" ")).join(", ")}\n\nUse fission help advanced COMMAND [SUBCOMMAND] for syntax. Saved old plans/jobs\nremain readable. Direct-open and watch were removed; no history is migrated.\nNever manually mutate a managed task while its supervisor is active.`;
   if (parts[0] === "advanced" && Object.hasOwn(advanced, parts.slice(1).join(" "))) {
     const command = parts.slice(1).join(" ");

@@ -134,8 +134,8 @@ const catalogPrice = (machine) => {
   return money(String(machine.our_daily));
 };
 
-function rentalFor(machine, machines, seconds, region) {
-  if (seconds >= 86400) {
+function rentalFor(machine, machines, seconds, region, noResize = false) {
+  if (seconds >= 86400 || noResize) {
     const days = Math.ceil(seconds / 86400);
     return { estimate: catalogPrice(machine) * BigInt(days), prepaidHours: days * 24 };
   }
@@ -183,7 +183,7 @@ export async function machineOffers(options, machines) {
     if (machine.provider !== "vultr" || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
     seen.add(machine.id);
     let capabilities, rental;
-    try { capabilities = machineCapabilities(machine); rental = rentalFor(machine, machines, seconds, options.region); }
+    try { capabilities = machineCapabilities(machine); rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]); }
     catch { omitted++; continue; }
     if (Object.entries(requirements).some(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value))) continue;
@@ -278,7 +278,7 @@ export async function createPlan(name, options, task) {
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value)).map(([key, value]) => `${key}=${value}`);
     if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
     const seconds = duration(options.duration);
-    rental = rentalFor(machine, machines, seconds, options.region);
+    rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]);
     if (!rental) return { status: "unavailable", reason: "No supported starter resize for this target duration and machine.", requirements, paymentSubmitted: false };
   } else {
     if (options.machine || options.region) throw new Error("Machine and region require --provider compute-mpp.");
@@ -318,7 +318,7 @@ export async function createPlan(name, options, task) {
   }
   const candidates = [{ machine, capabilities, body, lease: rental?.lease }, ...alternatives.map((item) => {
     const target = machines.find((entry) => entry.id === item.machine && entry.provider === "vultr");
-    const rental = rentalFor(target, machines, timeout, options.region);
+    const rental = rentalFor(target, machines, timeout, options.region, options["no-resize"]);
     return { machine: target, capabilities: item.capabilities, lease: item.lease,
       body: { ...body, plan: rental.lease?.starter.id || target.id, prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours } };
   })];

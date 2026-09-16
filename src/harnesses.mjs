@@ -4,7 +4,7 @@ import { recipe, duration, sourceRecipes } from "./workspace.mjs";
 import { fingerprint } from "./experiments.mjs";
 
 // Shared by CLI validation and multi-machine manifests.
-export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "cpu", "memory", "disk", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
+export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
 
 // One selection contract; recipes remain the pinned preparation source of truth.
 export const harnesses = {

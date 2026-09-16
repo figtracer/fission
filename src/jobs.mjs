@@ -43,7 +43,19 @@ os.chmod(p,0o700)
 log=(p/'supervisor.log').open('ab')
 subprocess.Popen(['python3',str(p/'runner.py'),str(p)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
 print(json.dumps({'id':p.name,'phase':'submitted'}))`;
-  const result = await execute(state, ["python3", "-c", script, remotePath(id), JSON.stringify(spec), runnerBytes.toString("base64")], operationCap, job.requestId);
+  let result;
+  try {
+    result = await execute(state, ["python3", "-c", script, remotePath(id), JSON.stringify(spec), runnerBytes.toString("base64")], operationCap, job.requestId,
+      { deadline: deadline * 1000 });
+  } catch (error) {
+    if (error.notDispatched) {
+      job.phase = "failed";
+      job.observation = { phase: "failed", reason: "dispatch_deadline", error: error.message };
+      job.observedAt = new Date().toISOString();
+      await writeJSON(file, job);
+    }
+    throw error;
+  }
   if (result.returncode !== 0) throw new Error(`Job launch unresolved. Inspect job ${id} before doing anything else.`);
   job.phase = "submitted";
   await writeJSON(file, job);

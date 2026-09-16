@@ -61,6 +61,7 @@ export async function report(name, id, options = {}) {
       remoteId: state.remoteId, phase: state.phase, requestedAt: state.requestedAt, observedAt: state.observedAt,
       expiresAt: state.providerExpiresAt || state.deadlineEstimate, expiryEstimated: !state.providerExpiresAt,
       closedAt: state.closedAt, preparationAcceptance: state.preparationAcceptance || null, region: state.body?.region, recipe: state.recipe.name, profile: state.profile,
+      accessObservations: state.accessObservations || [], initialization: state.initialization || null,
       requirements: state.requirements, resources: { quoted: state.capabilities?.capabilities || state.capabilities || null,
         providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
       source: state.source || null },

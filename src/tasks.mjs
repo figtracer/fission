@@ -100,16 +100,20 @@ async function planTask(name, options, command, experiment) {
   const { digest, ...recipe } = definition;
   const plan = await createPlan(name, { recipe, repo: options.repo, ref: options.ref, disk,
     cpu: options.cpu, memory: options.memory, budget: options.budget, duration: options.duration,
-    region: options.region, cheapest: true, kind: "vm", os: "linux", arch: "x86_64" }, task);
+    region: options.region, machine: options.machine, provider: options.machine ? "compute-mpp" : undefined,
+    cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
+    "no-resize": options["no-resize"] }, task);
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, harness: task.harness, mode: task.mode,
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
-    fallback: { baseline: plan.selection.baseline, creationCap: plan.creationCap,
+    fallback: plan.selection ? { strategy: "cheapest", baseline: plan.selection.baseline, creationCap: plan.creationCap,
       providerCount: plan.selection.providerCount, quoteErrors: plan.selection.quoteErrors, skipped: plan.selection.skipped,
       alternates: plan.selection.alternates.map((item) => ({ provider: plan.provider, machine: item.machine.id, resources: item.capabilities })),
-      note: "Pre-payment alternatives only, cheapest compatible first within the task's creation cap. Resources, region, duration and lifecycle headroom are preserved. All listed machines currently share one gateway; this is not independent-provider failover. No replacement after a purchase intent." },
+      note: "Pre-payment alternatives only, cheapest compatible first within the task's creation cap. Resources, region, duration and lifecycle headroom are preserved. All listed machines currently share one gateway; this is not independent-provider failover. No replacement after a purchase intent." }
+      : { strategy: "exact", creationCap: plan.creationCap, alternates: [],
+        note: "Exact machine selection has no alternative-machine fallback. Revalidate the saved machine and quote before payment; no replacement after a purchase intent." },
     cache: task.cache || null, guidance: task.guidance, experiment: task.experiment || null,
     note: "Prepaid provider credit may outlive the authorized task; the supervisor closes early. No refund assumed. Run with --approve only within existing authorization." };
   return preview;
@@ -222,6 +226,8 @@ export async function taskStatus(name, expectedExperiment) {
   return { name, harness: task.harness, mode: task.mode, phase: nextTaskStep(state, jobs), outcome: task.outcome || null,
     supervisor: { pid: owner?.pid || null, alive: Boolean(owner && processAlive(owner.pid)), lastObservedAt: task.observedAt || null },
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
+    accessObservations: state.accessObservations || [], initialization: state.initialization || null,
+    resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
     cleanup: { phase: state.phase, confirmed: terminal(state) || state.phase === "not_submitted", observedAt: state.closedAt || null },
@@ -300,8 +306,17 @@ async function finish(name, jobs) {
     ...(state.task.mode === "build" ? ["/workspace/build.json"] : []),
     ...(state.task.mode === "synced" ? ["/workspace/ethereum-data/snapshot.json", "/workspace/ethereum-data/current.json"] : [])])];
   const destination = join(directory(name), "evidence");
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-  for (const remote of files) {
+  let collectionReady = true;
+  try { await mkdir(destination, { recursive: true, mode: 0o700 }); }
+  catch (error) {
+    collectionReady = false;
+    state = await update(name, (task) => {
+      task.lastError = `Evidence setup failed: ${error.message}`;
+      for (const remote of files) if (!task.exports.some((item) => item.remote === remote))
+        task.exports.push({ remote, phase: "not_collected", error: task.lastError });
+    });
+  }
+  for (const remote of collectionReady ? files : []) {
     if (state.task.exports.some((item) => item.remote === remote)) continue;
     // Export timeout shares one cutoff; teardown retains its full request allowance.
     if (Date.now() >= transfer.deadline) {
@@ -377,7 +392,10 @@ export async function supervise(name) {
             delete task.report;
             if (task.lastError?.startsWith("Cleanup remains unconfirmed.")) delete task.lastError;
           });
-        } else if (step === "prepare") await prepare(name);
+        } else if (step === "prepare") {
+          await prepare(name);
+          await update(name, (task) => { if (task.lastError?.startsWith("prepare:")) delete task.lastError; });
+        }
         else if (["bootstrap", "preparation", "work"].includes(step)) await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true);
         else if (step === "upload") {
           await update(name, async (task, state) => {
