@@ -149,11 +149,13 @@ export async function request(state, operation, body, maximum, id = randomUUID()
 export async function recoverCreate(state) {
   const dir = join(directory(state.name), "requests"), id = state.createRequest;
   const path = join(dir, `${id}.response.json`);
+  let responseText;
+  try { responseText = await readFile(path, "utf8"); } catch { return null; }
   let response;
-  try { response = await readJSON(path); } catch { return null; }
+  try { response = JSON.parse(responseText); } catch { /* Preserve empty or malformed evidence for exact rejection classification. */ }
   if (!response) {
     const intent = await readJSON(join(dir, `${id}.json`)), error = await readJSON(join(dir, `${id}.error.json`));
-    const responseText = await readFile(path, "utf8"), metaText = await readFile(join(dir, `${id}.meta.json`), "utf8");
+    const metaText = await readFile(join(dir, `${id}.meta.json`), "utf8");
     const result = { code: intent?.exitCode, interruption: intent?.interruption, stdout: error?.stdout || "", stderr: error?.stderr || "" };
     if (error && rejectedCreate(state, "create", result, responseText, metaText)) await finalizeRejectedCreate(state, id, error);
   }
