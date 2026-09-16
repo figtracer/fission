@@ -24,7 +24,7 @@ Options:
   --cwd DIR               Guest cwd; default /workspace/source with repo, else /workspace
   --cpu N --memory GiB --disk GiB  Raise harness resource floors
   --machine ID             Require one exact catalog machine; disables fallback
-  --no-resize             Buy the selected VM directly; short tasks still prepay one day
+  --no-resize             Direct VM; required above 4 vCPU/8 GiB for short alpha tasks
   --prepare-duration D    Raise the preparation allowance for this task
   --output DIR            Local timestamped reports (default ./fission)
 
@@ -47,6 +47,8 @@ They are planning policy based on dated observations, not performance guarantees
 Preview includes the evidence and uncertainty. Short plans reject before spending.
 The prepaid lease can outlive TOTAL; no extra execution is authorized by credit.
 --no-resize preserves TOTAL and its guest deadline while bypassing starter migration.
+Public-alpha automatic resize is limited to targets up to 4 vCPU and 8 GiB RAM;
+larger short tasks must use explicit direct provisioning and still prepay one day.
 Resizable short leases wait for healthy cloud-init before migration, then require
 the trusted guest—not provider plan fields—to show the selected CPU, RAM, root
 disk, and healthy initialization. The gateway exposes no provider upgrade-job ID;

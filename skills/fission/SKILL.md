@@ -34,7 +34,7 @@ Run without `--approve` first. Inspect the quote, allocation, machine resources,
 
 Inspect the preview's fallback candidates and creation cap. Automatic selection prefers compatible quoted alternatives within the task budget, without a percentage premium rule; resources, region, duration and lifecycle headroom remain fixed. Fallback stops at purchase intent: uncertain creation never permits another rental. All currently eligible VM offers share one gateway. MPP and x402 are permitted, but only MPP/Tempo purchases are implemented; read `help rental` for gateway qualification rather than treating catalog presence as lifecycle support.
 
-Use `--no-resize` only when the task explicitly requires direct provisioning. It prepays the selected VM for at least one day but preserves the requested shorter task/guest deadline and early cleanup; every previewed fallback must also be direct.
+Public-alpha automatic resize is limited to selected targets at or below 4 vCPU and 8 GiB RAM. Larger short tasks require `--no-resize`. It prepays the selected VM for at least one day but preserves the requested shorter task/guest deadline and early cleanup; every previewed fallback must also be direct. Treat this as a conservative evidence boundary, not a provider limit or proof that direct provisioning succeeds.
 
 For test/build mode provide public `--repo` and full-SHA `--ref`; use `--patch` for the one-time source patch. Use repeatable `--input FILE[=/workspace/path]` for workload files and `--artifact /workspace/file` for outputs. Assert that intended tests actually ran; a zero-test Cargo result is not validation.
 

@@ -49,6 +49,8 @@ Automatic selection retains compatible alternatives from the quoted shortlist, c
 
 Use `--machine ID` when a reproducible comparison or qualification run requires one exact catalog machine. Exact selection has no alternative-machine fallback.
 
+During public alpha, automatic starter resizing supports targets up to 4 vCPU and 8 GiB RAM. Larger short tasks require `--no-resize`, which provisions the selected machine directly for at least one prepaid day while preserving the shorter task deadline.
+
 Bare `fission` opens the Rust task dashboard. Click a task to inspect it. Inside `fission advanced tmux`, **SSH terminal** opens a small popup while the dashboard keeps refreshing; a plain dashboard uses fullscreen SSH and resumes refresh after the shell exits. Stopping requires a second confirmation: provider cleanup may lose guest files that were not collected, but local task/experiment folders, collected evidence and reports, and caches already saved by successful builds remain. Other experiment machines keep running.
 
 Tasks appear in outcome order: **Succeeded**, **Active**, **Unsuccessful**, then dimmed **Unresolved**. Experiments stay together under their combined outcome; success with unconfirmed cleanup stays unresolved. **Closed history** is collapsed under all records. `[advanced]` identifies old unfinished workspaces without a task supervisor; normal runs need no “managed” label. List order is presentation, not spending or cleanup authority.
