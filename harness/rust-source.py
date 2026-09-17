@@ -1,5 +1,7 @@
 """Prepare and build the selected Rust workspace; jobs own execution deadlines."""
 import hashlib
+import errno
+import fcntl
 import json
 import os
 import pathlib
@@ -14,9 +16,72 @@ import urllib.request
 
 # Foundry's locked Solar and vergen dependencies require Rust 1.96.
 TOOLCHAIN = '1.96.1'
+UBUNTU_SNAPSHOT = '20260917T000000Z'
 IDENTITY_CHECK = 'build-identity-check.json'
 DIAGNOSTIC_VALUE_BYTES = 2048
 DIAGNOSTIC_STATUS_BYTES = 4096
+
+
+def apt_idle():
+    states = subprocess.check_output([
+        'systemctl', 'show', 'apt-daily.service', 'apt-daily-upgrade.service',
+        '--property=ActiveState', '--value'], text=True)
+    states = [state for state in states.splitlines() if state]
+    jobs = subprocess.check_output([
+        'systemctl', 'list-jobs', '--no-legend', 'apt-daily.service', 'apt-daily-upgrade.service'], text=True).strip()
+    if len(states) != 2 or any(state not in ['inactive', 'failed'] for state in states) or jobs:
+        return False, {'states': states, 'jobs': jobs}
+    descriptors = []
+    try:
+        for path in ['/var/lib/dpkg/lock-frontend', '/var/lib/dpkg/lock', '/var/lib/apt/lists/lock',
+                     '/var/cache/apt/archives/lock']:
+            try:
+                descriptor = os.open(path, os.O_RDWR)
+            except FileNotFoundError:
+                continue
+            descriptors.append(descriptor)
+            try:
+                fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno in [errno.EACCES, errno.EAGAIN]:
+                    return False, {'states': states, 'jobs': jobs, 'lock': path}
+                raise
+        return True, {'states': states, 'jobs': jobs}
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def wait_for_apt(seconds=600):
+    deadline = time.monotonic() + seconds
+    details = None
+    while time.monotonic() < deadline:
+        idle, details = apt_idle()
+        if idle:
+            return
+        time.sleep(2)
+    raise RuntimeError(f'APT did not become idle within {seconds}s: {details}')
+
+
+def prepare_packages(snapshot=UBUNTU_SNAPSHOT):
+    subprocess.run(['systemctl', 'mask', 'apt-daily.service', 'apt-daily-upgrade.service'], check=True)
+    subprocess.run(['systemctl', 'mask', '--now', 'apt-daily.timer', 'apt-daily-upgrade.timer'], check=True)
+    wait_for_apt()
+    env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}
+    common = ['apt-get', '-S', snapshot]
+    policy = ['-o', 'DPkg::Lock::Timeout=600', '-o', 'APT::Get::Always-Include-Phased-Updates=true',
+              '-o', 'APT::Get::Never-Include-Phased-Updates=false', '-o', 'Dpkg::Options::=--force-confdef',
+              '-o', 'Dpkg::Options::=--force-confold', '--no-install-recommends', '--no-remove', '-y']
+    subprocess.run([*common, '-o', 'APT::Update::Error-Mode=any', 'update'], env=env, check=True)
+    subprocess.run([*common, *policy, 'dist-upgrade'], env=env, check=True)
+    subprocess.run([*common, *policy, 'install', 'git', 'ca-certificates', 'build-essential', 'clang',
+                    'libclang-dev', 'pkg-config', 'libssl-dev', 'cmake', 'protobuf-compiler'], env=env, check=True)
+    subprocess.run(['apt-get', '-o', 'DPkg::Lock::Timeout=600', 'check'], env=env, check=True)
+    audit = subprocess.check_output(['dpkg', '--audit'], env=env, text=True)
+    if audit.strip():
+        raise RuntimeError('dpkg audit reported incomplete package state: ' + audit[:2048])
+    wait_for_apt()
+    print(json.dumps({'packagesPrepared': True, 'snapshot': snapshot}), flush=True)
 
 
 def prepare_reth(env):
@@ -263,6 +328,9 @@ def cache(mode, arguments):
 def main():
     root = pathlib.Path('/workspace')
     mode, *binaries = sys.argv[1:]
+    if mode == 'prepare-packages':
+        prepare_packages()
+        return
     if mode == 'apply':
         patch, expected = binaries
         apply_patch(root / 'source', pathlib.Path(patch), expected)
