@@ -368,6 +368,9 @@ export async function download(state, remote, local, options = {}) {
       if (metadata.returncode) throw new Error("Remote file could not be read.");
       expected = JSON.parse(metadata.stdout);
       if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error("Invalid file manifest.");
+      if (options.expected && (expected.size !== options.expected.size || expected.sha256 !== options.expected.sha256 ||
+          !Number.isSafeInteger(options.expected.maximum) || expected.size > options.expected.maximum))
+        throw new Error("Remote file differs from the expected digest, size, or byte limit; no export stream started.");
       const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, outputFd: target.fd });
       if (result.returncode) throw new Error("Export interrupted or file changed.");
       const actual = await fingerprint(target);
@@ -381,6 +384,9 @@ export async function download(state, remote, local, options = {}) {
       const part = JSON.parse(result.stdout);
       if (!Number.isSafeInteger(part.size) || part.size < 0 || !/^[a-f0-9]{64}$/.test(part.sha256)) throw new Error("Invalid file manifest.");
       expected ??= part;
+      if (options.expected && (expected.size !== options.expected.size || expected.sha256 !== options.expected.sha256 ||
+          !Number.isSafeInteger(options.expected.maximum) || expected.size > options.expected.maximum))
+        throw new Error("Remote file differs from the expected digest, size, or byte limit; export stopped.");
       if (expected.sha256 !== part.sha256 || expected.size !== part.size) throw new Error("File changed during export. Quiesce the writer and try a new output path.");
       const bytes = Buffer.from(part.data, "base64");
       if (bytes.length !== Math.min(49152, expected.size - offset)) throw new Error("Incomplete file chunk.");
@@ -401,6 +407,8 @@ export async function close(name, options) {
     const state = await load(name);
     if (terminal(state)) return state;
     if (!state.remoteId) throw new Error("Run reconcile before closing an unresolved creation.");
+    if (state.cacheHost && !options["discard-output"])
+      throw new Error("Closing this cache VPS destroys its remote caches. Re-run with --discard-output only after reviewing cache list and accepting that loss.");
     if (state.phase === "termination_unknown" && await hasTerminationReservation(state)) {
       // A lost DELETE acknowledgement never authorizes a duplicate mutation.
       return refreshState(state);

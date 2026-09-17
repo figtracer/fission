@@ -73,7 +73,7 @@ fission run reth-network-tests --harness reth --mode test \
   /workspace/cargo test --locked -p reth-network --lib transactions::fetcher::tests
 ```
 
-Use `--patch ./change.patch` to apply one `git diff --binary HEAD` before testing or building. Use `build` only when the result requires release binaries. Build mode checks existing local release-binary caches before quoting, verifies exact source/toolchain/CPU/native-package identity on the guest, and falls back to a cold build on a legitimate mismatch. These caches are not Cargo target or incremental caches and do not accelerate source-test compilation.
+Use `--patch ./change.patch` to apply one `git diff --binary HEAD` before testing or building. Use `build` only when the result requires release binaries. Build mode checks existing release-binary caches before quoting, verifies exact source/toolchain/CPU/native-package identity on the guest, and falls back to a cold build on a legitimate mismatch. Caches can live locally, on mounted storage, or on an explicitly initialized retained Fission VPS; see [harness storage](docs/harnesses.md#vps-backed-build-cache). They are not Cargo target or incremental caches and do not accelerate source-test compilation.
 
 ## Multiple machines
 

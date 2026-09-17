@@ -26,6 +26,7 @@ function summary(state) {
     accessObservations: state.accessObservations, initialization: state.initialization, guestResources: state.guestResources,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, repairJob: state.repairJob, source: state.source, planId: state.id,
+    ...(state.cacheHost ? { cacheHost: state.cacheHost } : {}),
   };
 }
 
@@ -77,7 +78,7 @@ async function main() {
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
     "raise-to": { type: "string" }, approval: { type: "string" },
     "storage-dir": { type: "string" },
-    "max-bytes": { type: "string" },
+    "max-bytes": { type: "string" }, "cache-workspace": { type: "string" }, "cache-max-bytes": { type: "string" },
     scope: { type: "string" }, "max-head-age": { type: "string" },
     from: { type: "string" }, measurements: { type: "string" },
     log: { type: "string" }, notes: { type: "string" }, recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
@@ -102,7 +103,7 @@ async function main() {
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: ["plan", "approve"], stop: [], supervise: [],
     prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
-    dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], job: ["refresh"], wait: ["duration", "max-spend"],
+    dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir", "cache-workspace"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], job: ["refresh"], wait: ["duration", "max-spend"],
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
   if (!advanced) {
@@ -161,10 +162,15 @@ async function main() {
     case "storage": emit(await (await import("./storage.mjs")).storage(values["storage-dir"], Number(values["max-bytes"] || 0))); break;
     case "cache": {
       const cache = await import("./cache.mjs");
-      if (name === "list") {
+      if (name === "init") {
+        if (values["max-bytes"] !== undefined || values["storage-dir"] || values["cache-workspace"])
+          throw new Error("cache init accepts only the retained VPS workspace name.");
+        emit(await (await import("./cache-host.mjs")).initCacheHost(first));
+      } else if (name === "list") {
         if (values["max-bytes"] !== undefined) throw new Error("cache list takes no byte limit.");
-        emit(await cache.listCaches(values["storage-dir"]));
-      } else emit(await cache.buildCache(name, first, second, values["max-bytes"], values["storage-dir"]));
+        emit(await cache.listCaches(values["storage-dir"], values["cache-workspace"]));
+      } else emit(await cache.buildCache(name, first, second, values["max-bytes"], values["storage-dir"],
+        { cacheWorkspace: values["cache-workspace"] }));
       break;
     }
     case "check": {

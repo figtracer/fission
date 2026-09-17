@@ -25,6 +25,8 @@ Options:
   --cpu N --memory GiB --disk GiB  Raise harness resource floors
   --machine ID             Require one exact catalog machine; disables fallback
   --no-resize             Direct VM; required above 4 vCPU/8 GiB for short alpha tasks
+  --cache-workspace NAME  Use an initialized retained VPS for clean build caches
+  --cache-max-bytes N     Bound its compressed and expanded archive sizes
   --prepare-duration D    Raise the preparation allowance for this task
   --output DIR            Local timestamped reports (default ./fission)
 
@@ -107,8 +109,10 @@ const advanced = {
   machines: "--region REGION [--profile PROFILE] [--duration DURATION] [--max-spend AMOUNT] [--cpu N --memory GiB --disk GiB]",
   capabilities: "[foundry|reth|tempo|linux]", recipes: "",
   storage: "[--storage-dir DIR] [--max-bytes BYTES]",
-  cache: "list|save|restore (use command-specific help)", "cache list": "[--storage-dir DIR]",
-  "cache save": "NAME --max-bytes BYTES [--storage-dir DIR]", "cache restore": "NAME ID --max-bytes BYTES [--storage-dir DIR]",
+  cache: "init|list|save|restore (use command-specific help)", "cache init": "HOST",
+  "cache list": "[--storage-dir DIR | --cache-workspace HOST]",
+  "cache save": "NAME --max-bytes BYTES [--storage-dir DIR | --cache-workspace HOST]",
+  "cache restore": "NAME ID --max-bytes BYTES [--storage-dir DIR | --cache-workspace HOST]",
   dataset: "inspect|save|collect|restore (use command-specific help)", "dataset inspect": "NAME --max-bytes BYTES [--storage-dir DIR]",
   "dataset save": "NAME JOB --duration DURATION --max-bytes BYTES [--storage-dir DIR]",
   "dataset collect": "NAME JOB --max-bytes BYTES [--storage-dir DIR]",
