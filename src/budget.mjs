@@ -18,7 +18,7 @@ export class BudgetRejected extends Error {}
 function summarize(ledger) {
   if (!ledger) throw new Error("Initialize an aggregate budget with budget --total-spend AMOUNT --approve.");
   const allocated = Object.values(ledger.allocations).reduce((sum, item) => sum + units(item), 0n);
-  const reserved = Object.values(ledger.requests).reduce((sum, item) => sum + units(item.maximum), 0n);
+  const reserved = Object.values(ledger.requests).filter((item) => !item.resolution).reduce((sum, item) => sum + units(item.maximum), 0n);
   return { limit: ledger.limit, allocated: amount(allocated), reserved: amount(reserved), availableToAllocate: amount(units(ledger.limit) - allocated), allocations: ledger.allocations, vmCaps: ledger.vmCaps || {}, authorizationAmendments: ledger.authorizationAmendments || [] };
 }
 
@@ -127,6 +127,30 @@ export async function reserve(state, operation, maximum, id) {
     const reserveForClose = operation === "terminate" || (operation === "status" && closing) ? 0n : terminationReserve;
     if (used + units(maximum) + reserveForClose > units(cap)) throw new Error("Workspace budget exhausted; termination reserve is protected.");
     ledger.requests[id] = { name: state.name, operation, maximum, reservedAt: new Date().toISOString() };
+    await writeJSON(path, ledger);
+  }, 5000);
+}
+
+export async function releaseRejectedCreate(state, id, resolution) {
+  return lock(async () => {
+    const ledger = await readJSON(path), request = ledger?.requests?.[id];
+    if (!ledger || !request || request.name !== state.name || request.operation !== "create")
+      throw new Error("Rejected create has no matching budget reservation.");
+    if (request.resolution) {
+      if (request.resolution.requestId !== id || request.resolution.classification !== resolution.classification)
+        throw new Error("Create reservation has a conflicting resolution.");
+      return;
+    }
+    if (Object.entries(ledger.requests).some(([requestId, item]) => requestId !== id && item.name === state.name && !item.resolution))
+      throw new Error("Workspace has another unresolved monetary request; allocation remains reserved.");
+    const allocation = ledger.allocations[state.name];
+    if (!allocation || units(allocation) !== units(state.totalCap))
+      throw new Error("Rejected create allocation differs from its durable workspace cap.");
+    request.resolution = { requestId: id, classification: resolution.classification, recordedAt: resolution.recordedAt };
+    ledger.releasedAllocations ??= {};
+    if (ledger.releasedAllocations[state.name]) throw new Error("Workspace allocation was already released by another request.");
+    ledger.releasedAllocations[state.name] = { amount: allocation, requestId: id, recordedAt: resolution.recordedAt };
+    delete ledger.allocations[state.name];
     await writeJSON(path, ledger);
   }, 5000);
 }

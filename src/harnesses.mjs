@@ -4,7 +4,7 @@ import { recipe, duration, sourceRecipes } from "./workspace.mjs";
 import { fingerprint } from "./experiments.mjs";
 
 // Shared by CLI validation and multi-machine manifests.
-export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "cpu", "memory", "disk", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
+export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "cache-workspace", "cache-max-bytes", "manifest", "snapshot-plan", "checkpoint-url", "checkpoint", "max-head-age", "extra-disk-gib"];
 
 // One selection contract; recipes remain the pinned preparation source of truth.
 export const harnesses = {
@@ -25,6 +25,12 @@ export async function taskSpec(options, command) {
   if (!command.length || command.some((arg) => !arg || arg.includes("\0"))) throw new Error("Supply the workload argv after --.");
   if (options.solver && (harness !== "foundry" || mode !== "tools" || options.solver !== "z3")) throw new Error("--solver z3 applies to Foundry tools.");
   if (options.patch && !source) throw new Error("--patch applies to pinned client test/build modes; use --input for other workload files.");
+  if (options["cache-workspace"] && (mode !== "build" || options.patch))
+    throw new Error("--cache-workspace applies only to clean source build mode.");
+  if (options["cache-max-bytes"] !== undefined && !options["cache-workspace"])
+    throw new Error("--cache-max-bytes requires --cache-workspace.");
+  if (options["cache-workspace"] && (!Number.isSafeInteger(Number(options["cache-max-bytes"])) || Number(options["cache-max-bytes"]) <= 0))
+    throw new Error("A cache VPS requires a positive integer --cache-max-bytes transfer and expansion limit.");
   if (source && (!options.repo || !options.ref)) throw new Error("Client tests/builds require public --repo and exact --ref; --patch supplies changed source.");
   if (options.repo || options.ref) {
     if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(options.repo || "") || !/^[a-f0-9]{40}$/.test(options.ref || ""))

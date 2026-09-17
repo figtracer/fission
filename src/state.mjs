@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { link, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -86,21 +86,33 @@ export class OperationLocked extends Error {
   }
 }
 
+async function claimLock(path) {
+  const temp = `${path}.${randomUUID()}.tmp`;
+  const file = await open(temp, "wx", 0o600);
+  try {
+    await file.writeFile(JSON.stringify({ pid: process.pid }));
+  } finally { await file.close(); }
+  try {
+    await link(temp, path);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  } finally { await unlink(temp); }
+}
+
 export async function fileLocked(path, action, waitMs = 0) {
   const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  let file;
+  let acquired = false;
   const deadline = Date.now() + waitMs;
-  while (!file) {
-    try { file = await open(path, "wx", 0o600); }
-    catch (error) {
-      if (error.code !== "EEXIST") throw error;
+  while (!acquired) {
+    acquired = await claimLock(path);
+    if (!acquired) {
       if (Date.now() >= deadline)
         throw new OperationLocked(path);
       await delay(Math.min(25, deadline - Date.now()));
     }
   }
-  await file.writeFile(JSON.stringify({ pid: process.pid }));
-  await file.close();
   try { return await action(); } finally { await unlink(path); }
 }

@@ -61,6 +61,7 @@ export async function report(name, id, options = {}) {
       remoteId: state.remoteId, phase: state.phase, requestedAt: state.requestedAt, observedAt: state.observedAt,
       expiresAt: state.providerExpiresAt || state.deadlineEstimate, expiryEstimated: !state.providerExpiresAt,
       closedAt: state.closedAt, preparationAcceptance: state.preparationAcceptance || null, region: state.body?.region, recipe: state.recipe.name, profile: state.profile,
+      accessObservations: state.accessObservations || [], initialization: state.initialization || null,
       requirements: state.requirements, resources: { quoted: state.capabilities?.capabilities || state.capabilities || null,
         providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
       source: state.source || null },
@@ -74,7 +75,7 @@ export async function report(name, id, options = {}) {
       verifiedOutflow: unknown ? null : amount(transactions.reduce((sum, transaction) => sum + units(transaction.paid), 0n)),
       incomplete: unknown, refreshError: payments.refreshError || null, transactions },
     assessment: notes, log: null,
-    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
+    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
   };
   const parent = resolve(options.output || "fission", name);
   await mkdir(parent, { recursive: true });

@@ -13,6 +13,24 @@ const session = `fission-${createHash("sha256").update(root).digest("hex").slice
 const tmux = async (...args) => (await execute("tmux", args)).stdout.trim();
 const ready = state => state.provider === "compute-mpp" && state.phase === "ready" && state.remoteId && !state.resizePending;
 
+async function ownsSession() {
+  const target = session;
+  const marker = await tmux("show-option", "-qv", "-t", target, "@fission-home");
+  if (marker === root) return true;
+  if (marker) return false;
+  // Sessions created by older Fission versions predate the ownership marker.
+  // Migrate only when their isolated tmux environment proves the same resolved
+  // state directory and deterministic session identity.
+  let home, identity;
+  try {
+    home = await tmux("show-environment", "-t", target, "FISSION_HOME");
+    identity = await tmux("show-environment", "-t", target, "FISSION_TMUX_SESSION");
+  } catch { return false; }
+  if (home !== `FISSION_HOME=${root}` || identity !== `FISSION_TMUX_SESSION=${session}`) return false;
+  await tmux("set-option", "-t", session, "@fission-home", root);
+  return true;
+}
+
 async function window(name, select = false) {
   return fileLocked(join(root, ".tmux-window.lock"), async () => {
     const state = await load(name);
@@ -40,7 +58,7 @@ export async function popupMachine(name) {
   if (!ready(state)) throw new Error("SSH opens when the full VM is ready.");
   if (process.env.FISSION_TMUX_SESSION !== session || !process.env.TMUX_PANE)
     throw new Error("Open the popup from this Fission tmux dashboard.");
-  if (await tmux("show-option", "-qv", "-t", `=${session}`, "@fission-home") !== root)
+  if (!await ownsSession())
     throw new Error("The tmux session belongs to a different Fission state directory.");
   const pane = process.env.TMUX_PANE;
   if (await tmux("display-message", "-p", "-t", pane, "#{session_name}") !== session)
@@ -50,10 +68,14 @@ export async function popupMachine(name) {
     .filter(([, visiblePane]) => visiblePane === pane);
   if (clients.length !== 1)
     throw new Error("Show this dashboard in exactly one tmux client before opening its popup.");
-  await tmux("display-popup", "-E", "-w", "80%", "-h", "70%", "-T", name,
-    "-c", clients[0][0], "-t", pane,
-    "-e", `FISSION_HOME=${root}`, "-e", `FISSION_STORAGE_DIR=${storageRoot()}`,
-    process.execPath, cli, "advanced", "ssh", name);
+  try {
+    await tmux("display-popup", "-E", "-w", "80%", "-h", "70%", "-T", name, "-t", pane,
+      "-e", `FISSION_HOME=${root}`, "-e", `FISSION_STORAGE_DIR=${storageRoot()}`,
+      process.execPath, cli, "advanced", "ssh", name);
+  } catch (error) {
+    const detail = error.stderr?.trim().split("\n").at(-1);
+    throw new Error(detail ? `Could not open SSH popup: ${detail}` : "Could not open SSH popup.");
+  }
 }
 
 export async function openTmux() {
@@ -62,7 +84,7 @@ export async function openTmux() {
   let exists = false;
   try { await tmux("has-session", "-t", `=${session}`); exists = true; } catch { /* First launch. */ }
   if (exists) {
-    if (await tmux("show-option", "-qv", "-t", session, "@fission-home") !== root)
+    if (!await ownsSession())
       throw new Error("A different tmux session uses this name; preserve it.");
   } else {
     await tmux("new-session", "-d", "-s", session, "-n", "machines", "-e", `FISSION_HOME=${root}`,

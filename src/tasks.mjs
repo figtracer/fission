@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, open, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,7 +12,7 @@ import { execute } from "./provider.mjs";
 import { launch, listJobs, getJob, jobDone } from "./jobs.mjs";
 import { report } from "./reports.mjs";
 import { fingerprint } from "./experiments.mjs";
-import { cachePreflight, buildCache } from "./cache.mjs";
+import { cachePreflight, buildCache, stageCacheInput } from "./cache.mjs";
 import { guidance } from "./onboarding.mjs";
 
 // The plan owns authorization; workspace state owns coordination; jobs own
@@ -92,7 +92,8 @@ async function planTask(name, options, command, experiment) {
     if (candidate) {
       const remote = "/workspace/.fission/build-cache.tar.gz";
       if (task.inputs.some((input) => input.remote === remote)) throw new Error("Input conflicts with the selected build cache.");
-      task.inputs.push({ local: candidate.local, remote, bytes: candidate.bytes, sha256: candidate.id });
+      task.inputs.push({ ...(candidate.local ? { local: candidate.local } : {}), remote, bytes: candidate.bytes, sha256: candidate.id,
+        ...(candidate.cacheWorkspace ? { cache: { workspace: candidate.cacheWorkspace, maximum: candidate.maximum } } : {}) });
       task.preparation.unshift(["python3", "/workspace/.fission/rust-source.py", "cache-reuse", remote, candidate.id, String(candidate.maximum)]);
       task.artifacts.push("/workspace/cache-result.json");
     }
@@ -100,16 +101,20 @@ async function planTask(name, options, command, experiment) {
   const { digest, ...recipe } = definition;
   const plan = await createPlan(name, { recipe, repo: options.repo, ref: options.ref, disk,
     cpu: options.cpu, memory: options.memory, budget: options.budget, duration: options.duration,
-    region: options.region, cheapest: true, kind: "vm", os: "linux", arch: "x86_64" }, task);
+    region: options.region, machine: options.machine, provider: options.machine ? "compute-mpp" : undefined,
+    cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
+    "no-resize": options["no-resize"] }, task);
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, harness: task.harness, mode: task.mode,
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
-    fallback: { baseline: plan.selection.baseline, creationCap: plan.creationCap,
+    fallback: plan.selection ? { strategy: "cheapest", baseline: plan.selection.baseline, creationCap: plan.creationCap,
       providerCount: plan.selection.providerCount, quoteErrors: plan.selection.quoteErrors, skipped: plan.selection.skipped,
       alternates: plan.selection.alternates.map((item) => ({ provider: plan.provider, machine: item.machine.id, resources: item.capabilities })),
-      note: "Pre-payment alternatives only, cheapest compatible first within the task's creation cap. Resources, region, duration and lifecycle headroom are preserved. All listed machines currently share one gateway; this is not independent-provider failover. No replacement after a purchase intent." },
+      note: "Pre-payment alternatives only, cheapest compatible first within the task's creation cap. Resources, region, duration and lifecycle headroom are preserved. All listed machines currently share one gateway; this is not independent-provider failover. No replacement after a purchase intent." }
+      : { strategy: "exact", creationCap: plan.creationCap, alternates: [],
+        note: "Exact machine selection has no alternative-machine fallback. Revalidate the saved machine and quote before payment; no replacement after a purchase intent." },
     cache: task.cache || null, guidance: task.guidance, experiment: task.experiment || null,
     note: "Prepaid provider credit may outlive the authorized task; the supervisor closes early. No refund assumed. Run with --approve only within existing authorization." };
   return preview;
@@ -188,7 +193,7 @@ async function createMachines(name, options) {
 export function nextTaskStep(state, jobs, now = Date.now()) {
   const task = state.task;
   if (!task) return "legacy";
-  if (terminal(state) || state.phase === "not_submitted") return task.report ? "done" : "report";
+  if (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) return task.report ? "done" : "report";
   if (!state.remoteId) return "reconcile";
   if (state.phase === "termination_unknown") return "confirm";
   const cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - task.timing.cleanupSeconds * 1000;
@@ -216,15 +221,18 @@ export async function taskStatus(name, expectedExperiment) {
   const state = await load(name), task = state.task;
   if (expectedExperiment && !matchesExperiment(task, expectedExperiment))
     throw new Error(`Experiment member ${name} changed identity; refusing group operation.`);
-  if (!task) return { name, phase: state.phase, legacy: true, cleanupConfirmed: terminal(state), note: "Retained workspace; use advanced for recovery." };
+  if (!task) return { name, phase: state.phase, legacy: true, ...(state.cacheHost ? { cacheHost: state.cacheHost } : {}),
+    cleanupConfirmed: terminal(state), note: state.cacheHost ? "Retained VPS-backed build cache; use advanced cache/status/close." : "Retained workspace; use advanced for recovery." };
   const jobs = await listJobs(name), owner = await readJSON(ownerPath(name));
   const record = task.report?.record ? await readJSON(task.report.record) : null;
   return { name, harness: task.harness, mode: task.mode, phase: nextTaskStep(state, jobs), outcome: task.outcome || null,
     supervisor: { pid: owner?.pid || null, alive: Boolean(owner && processAlive(owner.pid)), lastObservedAt: task.observedAt || null },
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
+    accessObservations: state.accessObservations || [], initialization: state.initialization || null,
+    resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
-    cleanup: { phase: state.phase, confirmed: terminal(state) || state.phase === "not_submitted", observedAt: state.closedAt || null },
+    cleanup: { phase: state.phase, confirmed: terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || null },
     report: task.report?.report || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
@@ -300,8 +308,17 @@ async function finish(name, jobs) {
     ...(state.task.mode === "build" ? ["/workspace/build.json"] : []),
     ...(state.task.mode === "synced" ? ["/workspace/ethereum-data/snapshot.json", "/workspace/ethereum-data/current.json"] : [])])];
   const destination = join(directory(name), "evidence");
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-  for (const remote of files) {
+  let collectionReady = true;
+  try { await mkdir(destination, { recursive: true, mode: 0o700 }); }
+  catch (error) {
+    collectionReady = false;
+    state = await update(name, (task) => {
+      task.lastError = `Evidence setup failed: ${error.message}`;
+      for (const remote of files) if (!task.exports.some((item) => item.remote === remote))
+        task.exports.push({ remote, phase: "not_collected", error: task.lastError });
+    });
+  }
+  for (const remote of collectionReady ? files : []) {
     if (state.task.exports.some((item) => item.remote === remote)) continue;
     // Export timeout shares one cutoff; teardown retains its full request allowance.
     if (Date.now() >= transfer.deadline) {
@@ -326,8 +343,11 @@ async function finish(name, jobs) {
     state = await update(name, (task) => { task.cache.save = { phase: eligible ? "attempted" : "skipped", reason: eligible ? "Save once after evidence, within cleanup cutoff" : "Requires successful clean build and remaining collection time" }; });
     if (eligible) {
       try {
-        const record = await buildCache("save", name, undefined, undefined, state.task.cache.directory, transfer);
-        await update(name, (task) => { task.cache.save = { phase: "saved", id: record.id, bytes: record.bytes, directory: task.cache.directory }; });
+        const cacheWorkspace = state.task.cache.backend?.kind === "workspace" ? state.task.cache.backend.name : undefined;
+        const record = await buildCache("save", name, undefined, state.task.cache.maximum, state.task.cache.directory,
+          { ...transfer, cacheWorkspace });
+        await update(name, (task) => { task.cache.save = { phase: "saved", id: record.id, bytes: record.bytes,
+          ...(cacheWorkspace ? { cacheWorkspace } : { directory: task.cache.directory }) }; });
       } catch (error) { await update(name, (task) => { task.cache.save = { phase: "unresolved", reason: error.message }; }); }
     }
   } else if (state.task.cache?.save?.phase === "attempted") {
@@ -377,10 +397,28 @@ export async function supervise(name) {
             delete task.report;
             if (task.lastError?.startsWith("Cleanup remains unconfirmed.")) delete task.lastError;
           });
-        } else if (step === "prepare") await prepare(name);
+        } else if (step === "prepare") {
+          await prepare(name);
+          await update(name, (task) => { if (task.lastError?.startsWith("prepare:")) delete task.lastError; });
+        }
         else if (["bootstrap", "preparation", "work"].includes(step)) await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true);
         else if (step === "upload") {
-          await update(name, async (task, state) => {
+          const pending = state.task.inputs.find((item) => !item.uploadedAt);
+          let staged;
+          if (pending.cache && !pending.local) {
+            const deadline = Math.min(state.task.deadline - state.task.timing.cleanupSeconds * 1000,
+              Date.parse(state.requestedAt) + (state.task.timing.provisioningSeconds + state.task.timing.preparationSeconds) * 1000);
+            try {
+              staged = await stageCacheInput(name, pending, { deadline });
+              await update(name, (task) => { task.inputs.find((item) => item.remote === pending.remote).local = staged; });
+            } catch (error) {
+              await update(name, (task) => {
+                task.outcome = "preparation_failed";
+                task.lastError = `VPS cache staging failed: ${error.message}`;
+              });
+            }
+          }
+          if (!pending.cache || pending.local || staged) await update(name, async (task, state) => {
             const transfer = { deadline: Math.min(task.deadline - task.timing.cleanupSeconds * 1000,
               Date.parse(state.requestedAt) + (task.timing.provisioningSeconds + task.timing.preparationSeconds) * 1000) };
             const input = task.inputs.find((item) => !item.uploadedAt);
@@ -406,6 +444,10 @@ export async function supervise(name) {
             }
             input.uploadedAt = new Date().toISOString();
           });
+          if (staged) {
+            try { await rm(dirname(staged), { recursive: true, force: true }); }
+            catch (error) { await update(name, (task) => { task.cache.stagingCleanupError = error.message; }); }
+          }
         } else if (step.startsWith("launch-")) {
           const id = step.slice(7);
           await update(name, async (task, state) => {

@@ -49,7 +49,7 @@ async function main() {
       transactions.some((item) => item.paid === null || item.workspaces.length !== 1) ? null :
       transactions.reduce((sum, item) => sum + units(item.paid), 0n);
     const capacity = state.observedResources || (state.lease ? state.lease.starterCapabilities : state.capabilities);
-    const finished = ["terminated", "expired", "not_submitted"].includes(state.phase);
+    const finished = ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase);
     const unresolved = state.phase.endsWith("_unknown");
     return {
       name: state.name,

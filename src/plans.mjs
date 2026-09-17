@@ -124,6 +124,9 @@ const minimumHeadroom = 300n;
 // and guest verification. Actual remaining time is gated again before bootstrap.
 const preparationAllowanceSeconds = 30 * 60;
 const resizeFamily = (id) => /^vc2-/.test(id) ? "vc2" : /^voc-m-.*-amd$/.test(id) ? "voc-m-amd" : null;
+const resizePolicyMessage = "Public-alpha automatic resize is limited to targets up to 4 vCPU and 8 GiB RAM; use --no-resize for explicit direct provisioning.";
+const resizePolicyReason = (machine) => machine.vcpu_count > 4 || machine.ram > 8 * 1024
+  ? resizePolicyMessage : null;
 const hourlyRate = (machine) => {
   if (!Number.isFinite(machine.our_hourly) || machine.our_hourly <= 0) throw new Error("Missing hourly compute rate.");
   return money(String(machine.our_hourly));
@@ -134,11 +137,12 @@ const catalogPrice = (machine) => {
   return money(String(machine.our_daily));
 };
 
-function rentalFor(machine, machines, seconds, region) {
-  if (seconds >= 86400) {
+function rentalFor(machine, machines, seconds, region, noResize = false) {
+  if (seconds >= 86400 || noResize) {
     const days = Math.ceil(seconds / 86400);
     return { estimate: catalogPrice(machine) * BigInt(days), prepaidHours: days * 24 };
   }
+  if (resizePolicyReason(machine)) return null;
   const family = resizeFamily(machine.id);
   if (!family) return null;
   const targetRate = hourlyRate(machine), candidates = [];
@@ -178,16 +182,20 @@ export async function machineOffers(options, machines) {
   const seconds = duration(options.duration || "24h");
   machines ??= await catalog();
   const candidates = [], seen = new Set();
-  let compatible = 0, omitted = 0, unsupportedLease = 0;
+  let compatible = 0, omitted = 0, unsupportedLease = 0, resizePolicy = 0;
   for (const machine of machines) {
     if (machine.provider !== "vultr" || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
     seen.add(machine.id);
-    let capabilities, rental;
-    try { capabilities = machineCapabilities(machine); rental = rentalFor(machine, machines, seconds, options.region); }
+    let capabilities;
+    try { capabilities = machineCapabilities(machine); }
     catch { omitted++; continue; }
     if (Object.entries(requirements).some(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value))) continue;
     compatible++;
+    if (seconds < 86400 && !options["no-resize"] && resizePolicyReason(machine)) { resizePolicy++; continue; }
+    let rental;
+    try { rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]); }
+    catch { compatible--; omitted++; continue; }
     if (!rental) { unsupportedLease++; continue; }
     if (rental.estimate > money(cap)) continue;
     candidates.push({ machine, capabilities, ...rental });
@@ -212,11 +220,12 @@ export async function machineOffers(options, machines) {
   const prices = offers.map((offer) => money(offer.creationQuote));
   return { status: offers.length ? "quoted" : "unavailable", profile, requirements, ceiling: cap, currency: "USDC.e",
     region: options.region, leaseHours: seconds >= 86400 ? Math.ceil(seconds / 86400) * 24 : null, requestedHours: seconds / 3600, paymentSubmitted: false,
+    reason: !offers.length && compatible === resizePolicy && resizePolicy > 0 ? resizePolicyMessage : undefined,
     offers, average: prices.length ? { amount: amount((prices.reduce((a, b) => a + b, 0n) + BigInt(prices.length) - 1n) / BigInt(prices.length)),
       minimum: amount(prices[0]), maximum: amount(prices.at(-1)), sampleCount: prices.length, providerCount: 1,
       basis: "Live quotes from up to three cheapest compatible catalog plans within the ceiling, in this region for the requested target duration. Not a market average or spending authorization. Creation only; fees and extra services are excluded." } : null,
     quoteErrors,
-    excluded: { overCeiling: compatible - unsupportedLease - candidates.length + changedBeyondCap, unsupportedLease, incompleteCatalog: omitted, quoteFailures: quoteErrors.length },
+    excluded: { overCeiling: compatible - resizePolicy - unsupportedLease - candidates.length + changedBeyondCap, resizePolicy, unsupportedLease, incompleteCatalog: omitted, quoteFailures: quoteErrors.length },
     note: offers.length ? "Capacity and inventory are provider catalog claims; plan and open re-quote before payment. Leave allocation room for lifecycle operations." : "No verified quote within the ceiling. Requirements and budget were preserved." };
 }
 
@@ -278,7 +287,9 @@ export async function createPlan(name, options, task) {
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value)).map(([key, value]) => `${key}=${value}`);
     if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
     const seconds = duration(options.duration);
-    rental = rentalFor(machine, machines, seconds, options.region);
+    const policyReason = seconds < 86400 && !options["no-resize"] ? resizePolicyReason(machine) : null;
+    if (policyReason) return { status: "unavailable", reason: policyReason, requirements, paymentSubmitted: false };
+    rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]);
     if (!rental) return { status: "unavailable", reason: "No supported starter resize for this target duration and machine.", requirements, paymentSubmitted: false };
   } else {
     if (options.machine || options.region) throw new Error("Machine and region require --provider compute-mpp.");
@@ -318,7 +329,7 @@ export async function createPlan(name, options, task) {
   }
   const candidates = [{ machine, capabilities, body, lease: rental?.lease }, ...alternatives.map((item) => {
     const target = machines.find((entry) => entry.id === item.machine && entry.provider === "vultr");
-    const rental = rentalFor(target, machines, timeout, options.region);
+    const rental = rentalFor(target, machines, timeout, options.region, options["no-resize"]);
     return { machine: target, capabilities: item.capabilities, lease: item.lease,
       body: { ...body, plan: rental.lease?.starter.id || target.id, prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours } };
   })];
@@ -393,6 +404,8 @@ function validateCandidate(machines, candidate) {
   if (!current || !current.locations.includes(candidate.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(candidate.capabilities))
     throw new Error("Compute plan capacity changed. Generate a fresh plan.");
   if (candidate.lease) {
+    const policyReason = resizePolicyReason(current);
+    if (policyReason) throw new Error(policyReason);
     const starter = machines.find((item) => item.id === candidate.body.plan && item.provider === "vultr");
     if (!starter || !starter.locations.includes(candidate.body.region) || JSON.stringify(machineCapabilities(starter)) !== JSON.stringify(candidate.lease.starterCapabilities) ||
         hourlyRate(starter) !== money(candidate.lease.starterHourlyRate) || hourlyRate(current) !== money(candidate.lease.targetHourlyRate))

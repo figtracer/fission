@@ -31,9 +31,35 @@ fission run forge-change --harness foundry --mode test --repo https://github.com
 
 Generate the patch with `git diff --binary HEAD`, including lockfile changes (new files must be tracked or intent-to-add). The patch must be nonempty and is applied once before testing/building. Test readiness checks the prepared source identity, including the patch. Build readiness additionally verifies compiled binaries. The workload runs in `/workspace/source` by default. Neither preparation nor compilation establishes runtime correctness.
 
-Source runs inspect the existing local cache before quoting. Build mode can restore a hash-verified release-binary archive and skip compilation only when source tree, lockfile, submodules, toolchain, CPU flags, OS, native packages and harness identity match exactly on the guest. A candidate is not yet a hit. Incompatibility records a miss and falls back to a cold build; corrupt archives fail preparation. Clean successful builds save a cache after normal evidence, if local capacity and the cleanup cutoff permit. Interrupted saves are not replayed. Patched builds are not reusable caches.
+Source runs inspect the selected local, mounted, or VPS-backed cache before quoting. Build mode can restore a hash-verified release-binary archive and skip compilation only when source tree, lockfile, submodules, toolchain, CPU flags, OS, native packages and harness identity match exactly on the guest. A candidate is not yet a hit. Incompatibility records a miss and falls back to a cold build; corrupt archives fail preparation. Clean successful builds save a cache after normal evidence, if capacity and the cleanup cutoff permit. Interrupted saves are not replayed. Patched builds are not reusable caches.
 
 Storage defaults to `$FISSION_HOME/.cache/builds`; set `FISSION_STORAGE_DIR` to an existing local or mounted directory before running. Local files outlive the rental but are not cloud backups. Only trust your own cache directory: hashes establish integrity, not authenticity. These caches contain release binaries and provenance, **not Cargo target directories**; they do not accelerate test compilation or arbitrary revisions. The preview never claims that they do. Cross-rental hit rate depends on exact environmental compatibility; cache transfers are not assumed faster than builds.
+
+### VPS-backed build cache
+
+A separately rented Fission VPS can retain exact release-binary caches without keeping the persistent copy on the controller. Provision it through the existing advanced plan/open lifecycle, wait for its Linux bootstrap to become ready, then initialize its fixed cache namespace:
+
+```sh
+fission advanced plan build-cache --recipe linux --cheapest --kind vm \
+  --region REGION --disk DISK_GIB --duration 7d --budget AMOUNT
+fission advanced open build-cache --plan PLAN_ID --approve
+fission advanced wait build-cache bootstrap --duration 10m --max-spend AMOUNT
+fission advanced cache init build-cache
+fission advanced cache list --cache-workspace build-cache
+```
+
+Use it only for a clean source build, with an explicit compressed-and-expanded transfer bound:
+
+```sh
+fission run BUILD_NAME --harness reth --mode build \
+  --repo https://github.com/paradigmxyz/reth --ref FULL_40_CHARACTER_SHA \
+  --cache-workspace build-cache --cache-max-bytes BYTES \
+  --budget AMOUNT --duration TOTAL --work-duration WORK --region REGION -- COMMAND
+```
+
+Preview verifies the selected host identity, reachability, metadata, and observed lease coverage before buying the workload. A matching archive is staged temporarily through the controller, hash-checked before guest use, and removed after upload; successful clean builds publish back through bounded staging. Host failure never buys a replacement or silently falls back to persistent local custody. Cache-save failure is separate from workload success and cannot delay workload cleanup.
+
+The cache exists only until that VPS is closed, expires, or loses its disk. There is no automatic renewal, replication, snapshot, migration, encryption-at-rest guarantee, cloud-backup claim, or zero-local-disk transfer path. Hashes establish integrity, not trust in a compromised host. Review `cache list` before closing; a designated cache host requires explicit `fission advanced close build-cache --discard-output`, which destroys the remote cache with the VPS.
 
 Submodule worktrees must stay clean: provenance records their commits, not uncommitted dependency files. A parent-repository patch cannot carry those files. Commit dependency changes and pin their gitlinks rather than silently testing an unidentified dependency tree.
 
@@ -65,7 +91,7 @@ Use `--harness linux` only for ordinary Linux x86_64 shell/Python work outside t
 
 Work success and evidence completeness are distinct: inspect every export's `collected`, `partial` or `not_collected` phase. Cleanup remains mandatory even when export fails. Collected files are size/SHA-256 verified locally and copied into the report directory.
 
-Manual cache and Reth dataset operations remain advanced recovery. Inspect compatibility, local capacity, transfer time, remaining lease, and stopped writers before `fission advanced cache ...` or `fission advanced dataset ...`.
+Manual cache and Reth dataset operations remain advanced recovery. Inspect compatibility, local or cache-VPS capacity, transfer time, remaining lease, and stopped writers before `fission advanced cache ...` or `fission advanced dataset ...`. Dataset storage remains local/mounted only.
 
 ## Multiple machines
 

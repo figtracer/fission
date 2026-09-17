@@ -4,13 +4,18 @@ import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
-import { request, recoverCreate, execute, validRemoteId } from "./provider.mjs";
+import { request, recoverCreate, execute, validRemoteId, CreateNotPurchased } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
 export const operationCap = "0.0001";
 const recipeDirectory = fileURLToPath(new URL("../recipes/", import.meta.url));
 export const terminal = (state) => ["terminated", "expired"].includes(state.phase);
+const preparationDeadline = (state) => state.task ? Math.min(
+  Date.parse(state.requestedAt) + (state.task.timing.provisioningSeconds + state.task.timing.preparationSeconds) * 1000,
+  state.task.deadline - state.task.timing.cleanupSeconds * 1000,
+  Date.parse(state.providerExpiresAt || state.deadlineEstimate) - state.task.timing.cleanupSeconds * 1000,
+) : undefined;
 export const sourceRecipes = {
   "foundry-source": ["forge", "cast", "anvil", "chisel"],
   "reth-source": ["reth"],
@@ -40,10 +45,13 @@ export async function recipe(input = "linux") {
   } else {
     const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
     const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
+    const sourceHarness = binaries ? await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8") : null;
     value = binaries ? {
-      name: input, description: "Prepare Rust 1.96.1 and the exact source checkout. Run /workspace/build as a separate job; no node is started.", prepare: [],
-      afterCheckout: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare',*sys.argv[2:]],check=True)", await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8"), ...binaries]],
-      readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]], artifacts: ["/workspace/source.json"],
+      name: input, description: "Prepare Rust 1.96.1 and the exact source checkout. Run /workspace/build as a separate job; no node is started.",
+      prepare: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare-packages'],check=True)", sourceHarness]],
+      afterCheckout: [["python3", "/workspace/.fission/rust-source.py", "prepare", ...binaries]],
+      readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]],
+      artifacts: ["/workspace/source.json", "/workspace/build-identity-check.json"],
     } : JSON.parse(await readFile(file, "utf8"));
   }
   return validateRecipe(value);
@@ -107,6 +115,15 @@ export async function start(name, prepared) {
         state.phase = "not_submitted";
         state.preparationError = error.message;
         await save(state);
+      } else if (error instanceof CreateNotPurchased) {
+        state.phase = "not_purchased";
+        state.preparationError = error.message;
+        if (state.task) {
+          state.task.outcome = "not_purchased";
+          state.task.lastError = error.message;
+        }
+        await save(state);
+        return state;
       }
       throw error;
     }
@@ -127,13 +144,17 @@ async function prepareState(state) {
   if (!state.asyncPreparation || !state.remoteId || !["preparing", "preparation_pending"].includes(state.phase))
     throw new Error("This workspace is not awaiting preparation.");
   if (state.bootstrapJob) throw new Error("Bootstrap already recorded. Observe its existing job; do not launch it again.");
+  const deadline = preparationDeadline(state);
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
   if (state.provider === "compute-mpp") {
     const compute = await import("./compute.mjs");
     if (state.lease) {
-      if (!await compute.prepareLease(state)) return state;
+      if (!await compute.prepareLease(state, { deadline })) return state;
     } else {
-      await compute.prepareAccess(state);
-      await compute.verifyGuest(state);
+      await compute.prepareAccess(state, { deadline });
+      await compute.verifyInitialization(state, "direct", { deadline });
+      await compute.verifyGuest(state, { deadline });
     }
   }
   const { launch } = await import("./jobs.mjs");
@@ -154,11 +175,17 @@ pathlib.Path('/workspace/.fission/deadline.json').write_text(json.dumps(record))
 print(json.dumps(record))`, String(state.task.deadline / 1000)]);
   // The job identity is persisted before launch. An ambiguous result is observed,
   // never automatically replayed or mistaken for failed preparation.
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
+  const seconds = state.task
+    ? Math.min(state.durationSeconds, state.task.timing.preparationSeconds, Math.floor((deadline - Date.now()) / 1000))
+    : state.durationSeconds;
+  if (seconds <= 0) throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
   state.bootstrapJob = "bootstrap";
   state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log",
     ...(state.task ? ["/workspace/.fission/deadline.json"] : [])])] };
   await save(state);
-  await launch(state, "bootstrap", commands, state.task ? Math.min(state.durationSeconds, state.task.timing.preparationSeconds) : state.durationSeconds, state.recipe.readiness || []);
+  await launch(state, "bootstrap", commands, seconds, state.recipe.readiness || []);
   return state;
 }
 
@@ -222,7 +249,18 @@ export async function reconcile(name) {
   return locked(name, async () => {
     const state = await load(name);
     if (!state.remoteId) {
-      state.remoteId = await recoverCreate(state);
+      try { state.remoteId = await recoverCreate(state); }
+      catch (error) {
+        if (!(error instanceof CreateNotPurchased)) throw error;
+        state.phase = "not_purchased";
+        state.preparationError = error.message;
+        if (state.task) {
+          state.task.outcome = "not_purchased";
+          state.task.lastError = error.message;
+        }
+        await save(state);
+        return state;
+      }
       if (!state.remoteId)
         throw new Error(`No recoverable response for request ${state.createRequest}. Do not create again. Preserve ${directory(name)} for provider/payment reconciliation.`);
       state.phase = "preparation_pending";
@@ -333,6 +371,9 @@ export async function download(state, remote, local, options = {}) {
       if (metadata.returncode) throw new Error("Remote file could not be read.");
       expected = JSON.parse(metadata.stdout);
       if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error("Invalid file manifest.");
+      if (options.expected && (expected.size !== options.expected.size || expected.sha256 !== options.expected.sha256 ||
+          !Number.isSafeInteger(options.expected.maximum) || expected.size > options.expected.maximum))
+        throw new Error("Remote file differs from the expected digest, size, or byte limit; no export stream started.");
       const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, outputFd: target.fd });
       if (result.returncode) throw new Error("Export interrupted or file changed.");
       const actual = await fingerprint(target);
@@ -346,6 +387,9 @@ export async function download(state, remote, local, options = {}) {
       const part = JSON.parse(result.stdout);
       if (!Number.isSafeInteger(part.size) || part.size < 0 || !/^[a-f0-9]{64}$/.test(part.sha256)) throw new Error("Invalid file manifest.");
       expected ??= part;
+      if (options.expected && (expected.size !== options.expected.size || expected.sha256 !== options.expected.sha256 ||
+          !Number.isSafeInteger(options.expected.maximum) || expected.size > options.expected.maximum))
+        throw new Error("Remote file differs from the expected digest, size, or byte limit; export stopped.");
       if (expected.sha256 !== part.sha256 || expected.size !== part.size) throw new Error("File changed during export. Quiesce the writer and try a new output path.");
       const bytes = Buffer.from(part.data, "base64");
       if (bytes.length !== Math.min(49152, expected.size - offset)) throw new Error("Incomplete file chunk.");
@@ -366,6 +410,8 @@ export async function close(name, options) {
     const state = await load(name);
     if (terminal(state)) return state;
     if (!state.remoteId) throw new Error("Run reconcile before closing an unresolved creation.");
+    if (state.cacheHost && !options["discard-output"])
+      throw new Error("Closing this cache VPS destroys its remote caches. Re-run with --discard-output only after reviewing cache list and accepting that loss.");
     if (state.phase === "termination_unknown" && await hasTerminationReservation(state)) {
       // A lost DELETE acknowledgement never authorizes a duplicate mutation.
       return refreshState(state);
