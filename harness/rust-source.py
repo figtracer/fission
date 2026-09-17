@@ -14,6 +14,9 @@ import urllib.request
 
 # Foundry's locked Solar and vergen dependencies require Rust 1.96.
 TOOLCHAIN = '1.96.1'
+IDENTITY_CHECK = 'build-identity-check.json'
+DIAGNOSTIC_VALUE_BYTES = 2048
+DIAGNOSTIC_STATUS_BYTES = 4096
 
 
 def prepare_reth(env):
@@ -53,6 +56,76 @@ def environment(source, binaries):
 def sha(path):
     with pathlib.Path(path).open('rb') as file:
         return hashlib.file_digest(file, 'sha256').hexdigest()
+
+
+def atomic_json(path, value):
+    path = pathlib.Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile('w', dir=path.parent, prefix=f'.{path.name}-', delete=False) as file:
+            temporary = pathlib.Path(file.name)
+            json.dump(value, file, indent=2, sort_keys=True)
+            file.write('\n')
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
+def identity_value(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+    result = {'bytes': len(encoded), 'sha256': hashlib.sha256(encoded).hexdigest()}
+    if len(encoded) <= DIAGNOSTIC_VALUE_BYTES:
+        result['value'] = value
+    else:
+        result.update(preview=encoded[:DIAGNOSTIC_VALUE_BYTES].decode(errors='replace'), truncated=True)
+    return result
+
+
+def changed_lines(before, after):
+    old, new = set(str(before).splitlines()), set(str(after).splitlines())
+    return {
+        'removed': [line[:256] for line in sorted(old - new)[:16]],
+        'added': [line[:256] for line in sorted(new - old)[:16]],
+        'removedCount': len(old - new),
+        'addedCount': len(new - old),
+    }
+
+
+def verify_stable_build(root, source, before, after):
+    changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+    record = {
+        'schemaVersion': 1,
+        'status': 'matched' if not changed else 'mismatch',
+        'changedFields': changed,
+        'beforeSha256': identity_value(before)['sha256'],
+        'afterSha256': identity_value(after)['sha256'],
+    }
+    if changed:
+        record['fields'] = {}
+        for key in changed:
+            values = {'before': identity_value(before.get(key)), 'after': identity_value(after.get(key))}
+            if isinstance(before.get(key), str) and isinstance(after.get(key), str) and ('\n' in before[key] or '\n' in after[key]):
+                values['changedLines'] = changed_lines(before[key], after[key])
+            record['fields'][key] = values
+        try:
+            status = subprocess.check_output(['git', 'status', '--porcelain', '--ignore-submodules=none'],
+                                             cwd=source, text=True)
+            status_error = None
+        except (OSError, subprocess.SubprocessError) as error:
+            status, status_error = '', f'{type(error).__name__}: {error}'[:512]
+        encoded = status.encode()
+        record['gitStatus'] = {'bytes': len(encoded), 'sha256': hashlib.sha256(encoded).hexdigest(),
+                               'preview': encoded[:DIAGNOSTIC_STATUS_BYTES].decode(errors='replace'),
+                               'truncated': len(encoded) > DIAGNOSTIC_STATUS_BYTES}
+        if status_error:
+            record['gitStatus']['error'] = status_error
+    atomic_json(pathlib.Path(root) / IDENTITY_CHECK, record)
+    if changed:
+        raise RuntimeError('Build environment changed during compilation; changed fields: ' + ', '.join(changed))
+    return record
 
 
 def working_tree(source, env):
@@ -230,6 +303,7 @@ def main():
         print(json.dumps({'ready': True, 'compiled': False, 'build': record}))
         return
     if mode in ['build', 'ensure-build']:
+        atomic_json(root / IDENTITY_CHECK, {'schemaVersion': 1, 'status': 'not_checked', 'changedFields': []})
         before = identity(source, binaries, env)
         command = [str(cargo_home / 'bin' / 'cargo'), 'build', '--locked', '--release']
         for binary in binaries:
@@ -253,8 +327,7 @@ def main():
                 checksum = hashlib.file_digest(file, 'sha256').hexdigest()
             outputs.append({'path': str(destination), 'sha256': checksum, 'version': version})
         after = identity(source, binaries, env)
-        if after != before:
-            raise RuntimeError('Build environment changed during compilation')
+        verify_stable_build(root, source, before, after)
         report = {'identity': after, 'source': str(source), 'commit': commit, 'toolchain': TOOLCHAIN, 'profile': 'release', 'binaries': outputs,
                   'changes': subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True)}
         (root / 'build.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -288,6 +361,7 @@ def main():
     build.chmod(0o700)
     report = {'identity': identity(source, binaries, env), 'commit': commit, 'toolchain': TOOLCHAIN, 'build': ['/workspace/build'], 'binaries': binaries, 'compiled': False}
     (root / 'source.json').write_text(json.dumps(report, indent=2) + '\n')
+    atomic_json(root / IDENTITY_CHECK, {'schemaVersion': 1, 'status': 'not_checked', 'changedFields': []})
     print(json.dumps(report), flush=True)
 
 
