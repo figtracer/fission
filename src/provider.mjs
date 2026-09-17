@@ -18,7 +18,7 @@ const paymentOptions = ["--payment-intent", "charge", "--payment-token", payment
 const providerIncidents = new Set(["compute-mpp", "smol-orthogonal"]);
 const failureFile = (provider) => join(root, ".provider-failures", encodeURIComponent(providerId(provider)) + ".json");
 export const providerWarning = (provider) => providerIncidents.has(providerId(provider)) || existsSync(failureFile(provider))
-  ? "Recorded provider failure; see docs/rental.md#provider-history."
+  ? "Recorded provider failure; see docs/rental.md#provider-support."
   : null;
 
 export async function recordProviderFailure(provider) {
