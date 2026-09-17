@@ -5,7 +5,7 @@ import { locked, directory, writeJSON } from "./state.mjs";
 import { active, operationCap, sourceRecipes } from "./workspace.mjs";
 import { execute } from "./provider.mjs";
 
-export function probes(recipe, scope, maxHeadAge) {
+export function probes(recipe, scope, readiness) {
   let checks = recipe.checks?.filter((probe) => probe.scope === scope) || [];
   if (!checks.length && scope === "tools") checks = (recipe.readiness || []).map((argv, i) => ({ name: `tool-${i + 1}`, scope, argv, result: "exit" }));
   if (!checks.length && scope === "source" && Object.hasOwn(sourceRecipes, recipe.name))
@@ -13,15 +13,27 @@ export function probes(recipe, scope, maxHeadAge) {
   if (!checks.length && scope === "build" && Object.hasOwn(sourceRecipes, recipe.name))
     checks = [{ name: "compiled-artifacts", scope, argv: ["python3", "/workspace/.fission/rust-source.py", "verify", ...sourceRecipes[recipe.name]], result: "json" }];
   if (!checks.length && scope === "node" && recipe.name === "reth-synced") {
-    if (!Number.isSafeInteger(Number(maxHeadAge)) || Number(maxHeadAge) <= 0) throw new Error("Synced Reth readiness requires an explicit --max-head-age in seconds.");
+    if (!Number.isSafeInteger(Number(readiness)) || Number(readiness) <= 0) throw new Error("Synced Reth readiness requires an explicit --max-head-age in seconds.");
     checks = [{ name: "snapshot-and-storage", scope, result: "json", argv: ["python3", "-c", `import hashlib,json,pathlib,shutil
 root=pathlib.Path('/workspace/ethereum-data'); snapshot=json.loads((root/'snapshot.json').read_text()); manifest=root/'manifest.json'
 valid=hashlib.sha256(manifest.read_bytes()).hexdigest()==snapshot['manifestSha256']
 free=shutil.disk_usage(root).free; minimum=snapshot['extraDiskGiB']*2**30
 checks={'manifest':valid,'fullImport':snapshot.get('selection')=='full' and bool(snapshot.get('completedAt')),'databaseVersion':snapshot.get('storageVersion')==2,'diskAllowance':free>=minimum,'configuration':(root/'execution'/'reth.toml').is_file()}
 print(json.dumps({'ready':all(checks.values()),'checks':checks,'snapshotBlock':snapshot['block'],'storageVersion':snapshot['storageVersion'],'freeBytes':free,'requiredFreeBytes':minimum,'importer':snapshot['importer']}))`] }, { name: "execution-consensus-pair", scope,
-      argv: ["/workspace/ethereum", "status", "--max-head-age", String(maxHeadAge)], result: "json" }];
-  } else if (maxHeadAge !== undefined) throw new Error("--max-head-age applies to the synced Reth node check.");
+      argv: ["/workspace/ethereum", "status", "--max-head-age", String(readiness)], result: "json" }];
+  } else if (!checks.length && scope === "node" && recipe.name === "base-synced") {
+    if (!readiness || [readiness.maxHeadAge, readiness.maxSafeAge, readiness.maxL1HeadAge].some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+        [readiness.maxL1LagBlocks, readiness.maxTipLagBlocks].some((value) => !Number.isSafeInteger(value) || value < 0))
+      throw new Error("Base synced readiness requires explicit freshness and lag bounds.");
+    const args = Object.entries(readiness).flatMap(([key, value]) =>
+      [`--${key.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase())}`, String(value)]);
+    checks = [{ name: "base-snapshot-and-storage", scope, result: "json", argv: ["python3", "-c", `import hashlib,json,pathlib,shutil
+root=pathlib.Path('/workspace/base-data'); snapshot=json.loads((root/'snapshot.json').read_text()); manifest=root/'manifest.json'
+free=shutil.disk_usage(root).free; minimum=snapshot['extraDiskGiB']*2**30
+checks={'manifest':hashlib.sha256(manifest.read_bytes()).hexdigest()==snapshot['manifestSha256'],'fullImport':snapshot.get('selection')=='full' and bool(snapshot.get('completedAt')),'chain':snapshot.get('chainId')==8453,'databaseVersion':snapshot.get('storageVersion')==2,'diskAllowance':free>=minimum,'configuration':(root/'execution'/'reth.toml').is_file()}
+print(json.dumps({'ready':all(checks.values()),'checks':checks,'snapshotBlock':snapshot['block'],'storageVersion':snapshot['storageVersion'],'freeBytes':free,'requiredFreeBytes':minimum,'binary':snapshot['binary']}))`] },
+      { name: "base-execution-rollup-pair", scope, argv: ["/workspace/base-node", "status", ...args], result: "json" }];
+  } else if (readiness !== undefined) throw new Error("Freshness bounds apply to the matching synced Reth node check.");
   if (!checks.length) throw new Error(`Recipe has no ${scope} checks. Define named checks in the recipe.`);
   return checks;
 }

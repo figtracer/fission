@@ -19,7 +19,7 @@ For fuzz/invariant work, preserve test names, seed, run/depth counts, reverts/di
 
 ## Source tests and builds
 
-Use `test` for Cargo tests or benchmarks in Foundry, Reth or Tempo. It prepares the pinned checkout, toolchain and native dependencies, then executes your command directly: **no release build before tests**. Cargo's selected dependency/test compilation consumes WORK time. Assert a nonzero number of intended tests passed; Cargo can exit successfully when a filter matches nothing.
+Use `test` for Cargo tests or benchmarks in Foundry, Ethereum/Base Reth or Tempo. It prepares the pinned checkout, toolchain and native dependencies, then executes your command directly: **no release build before tests**. Cargo's selected dependency/test compilation consumes WORK time. Assert a nonzero number of intended tests passed; Cargo can exit successfully when a filter matches nothing.
 
 Test a changed revision with a public GitHub repository and exact commit:
 
@@ -65,13 +65,19 @@ Submodule worktrees must stay clean: provenance records their commits, not uncom
 
 ## Reth
 
-Modes: `dev` for the isolated pinned development chain, `test` for selected source tests/benchmarks without a node build, `build` for release binaries, and `synced` for Ethereum mainnet paired with Lighthouse. Only `--chain ethereum` is implemented; Base-Reth and Reth-BSC are unavailable.
+Modes: `dev` for the isolated pinned Ethereum development chain, `test` for selected source tests/benchmarks without a node build, `build` for release-profile binaries, and `synced` for a managed mainnet node. Omitted `--chain` means `ethereum` and preserves all four modes. `--chain base` supports `test`, `build`, and `synced`; Base `dev` and Reth-BSC are unavailable.
+
+Base source mode uses a pinned public checkout such as the authoritative `https://github.com/base/base` repository. Public forks are accepted when explicitly pinned. It installs the shared Rust 1.96.1 source environment and Base's native dependencies. Build mode runs locked Cargo release compilation for the `base-reth-node` binary; this is Fission's ordinary `release` profile, not Base's published max-performance profile. The inherited 8 vCPU, 32 GiB RAM and 200 GiB disk floors are planning defaults, not measured Base requirements; current short public-alpha runs require `--no-resize` at that size.
+
+For example, a source test can execute `/workspace/cargo test --locked -p base-execution-cli --lib tests::parse_dev -- --exact`, then confirm that one intended test ran. This checks Base's CLI/dev-chain parser in source; it does not start or validate a Base node. A build can invoke any bounded workload after Fission has produced and verified `/workspace/base-reth-node`.
+
+Base `dev` remains unavailable. A standalone execution client in development mode does not provide Base rollup consensus, L1 derivation or bridge/finality behavior. Base `synced` uses the signed, pinned unified Base binary to manage execution and rollup consensus together, restores a content-pinned full snapshot, verifies the operator's Ethereum execution/beacon dependencies, and gates work on coherent advancing unsafe and derived-safe state. Do not label Base source tests, compilation, a standalone dev process or a Base fork simulation as Base node or consensus validation.
 
 Transaction-fetcher/gossip unit and local-peer integration tests need no Ethereum snapshot. Synced public-peer performance is a different experiment: prepare comparable baseline/candidate nodes, wait for paired readiness and peer warm-up, and retain raw metrics. A two-machine manifest does not automatically supply peer wiring, compatible databases or statistical comparability.
 
-For dev, record client version, genesis hash, chain ID, transactions/receipts, nonces and before/after state. Both bundled dev chains use chain ID 1337, so chain ID alone is insufficient. Reth dev mines on transactions; an idle head need not advance. Compilation proves neither sync nor consensus.
+For Ethereum dev, record client version, genesis hash, chain ID, transactions/receipts, nonces and before/after state. Both bundled dev chains use chain ID 1337, so chain ID alone is insufficient. Reth dev mines on transactions; an idle head need not advance. Compilation proves neither sync nor consensus.
 
-Synced mode requires the canonical manifest and full planner JSON, a separately verified recent checkpoint root/epoch and HTTPS URL, explicit head-age bound, and extra disk allowance. Read [reth.md](reth.md); the managed run performs import, startup, readiness and cleanup.
+Ethereum synced mode requires the canonical manifest and full planner JSON, a separately verified recent checkpoint root/epoch and HTTPS URL, explicit head-age bound, and extra disk allowance. Base synced mode instead requires a pinned Base manifest URL/local file, its canonical full plan, credential-free operator L1 endpoints and explicit unsafe/safe/L1 freshness and lag bounds. Read [reth.md](reth.md); the managed run performs import, startup, readiness and cleanup.
 
 ## Tempo
 

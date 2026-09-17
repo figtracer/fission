@@ -106,6 +106,7 @@ async function planTask(name, options, command, experiment) {
     "no-resize": options["no-resize"] }, task);
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, harness: task.harness, mode: task.mode,
+    ...(task.chain ? { chain: task.chain } : {}),
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
@@ -306,7 +307,9 @@ async function finish(name, jobs) {
   const files = [...new Set([...state.recipe.artifacts, ...state.task.artifacts,
     ...jobs.flatMap((job) => [job.log, `/workspace/.fission/jobs/${job.id}/status.json`]),
     ...(state.task.mode === "build" ? ["/workspace/build.json"] : []),
-    ...(state.task.mode === "synced" ? ["/workspace/ethereum-data/snapshot.json", "/workspace/ethereum-data/current.json"] : [])])];
+    ...(state.task.mode === "synced" ? state.task.chain === "base"
+      ? ["/workspace/base-data/snapshot.json", "/workspace/base-data/current.json"]
+      : ["/workspace/ethereum-data/snapshot.json", "/workspace/ethereum-data/current.json"] : [])])];
   const destination = join(directory(name), "evidence");
   let collectionReady = true;
   try { await mkdir(destination, { recursive: true, mode: 0o700 }); }

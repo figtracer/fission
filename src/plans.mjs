@@ -72,7 +72,9 @@ export const profiles = {
   "foundry-symbolic": { os: "linux", kind: "vm", architecture: "x86_64" },
   "foundry-source": { os: "linux", architecture: "x86_64", cpu: 4, memoryGiB: 16, diskGiB: 100 },
   "reth-source": { os: "linux", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 200 },
+  "base-reth-source": { os: "linux", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 200 },
   "reth-synced": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 2048, p2p: true },
+  "base-synced": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 16, memoryGiB: 64, diskGiB: 2048, p2p: true },
   "tempo-source": { os: "linux", architecture: "x86_64", cpu: 8, memoryGiB: 32, diskGiB: 200 },
   "tempo-node": { os: "linux", kind: "vm", architecture: "x86_64", cpu: 16, memoryGiB: 32, diskGiB: 1024, p2p: true },
 };
@@ -237,7 +239,7 @@ export async function createPlan(name, options, task) {
   if (options.from) options = await (await import("./experiments.mjs")).planOptions(options);
   const definition = await recipe(options.recipe || "linux");
   const recipeName = definition.name;
-  if (["reth-synced", "foundry-symbolic"].includes(recipeName)) {
+  if (["reth-synced", "base-synced", "foundry-symbolic"].includes(recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error(`The ${recipeName} recipe requires its matching profile.`);
     options.profile = recipeName;
   }

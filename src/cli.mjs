@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { list, load, locked } from "./state.mjs";
 import { execute, providerWarning } from "./provider.mjs";
-import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair } from "./workspace.mjs";
+import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair, sourceRecipes } from "./workspace.mjs";
 
 import { budget } from "./budget.mjs";
 import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
@@ -69,7 +69,8 @@ async function main() {
     patch: { type: "string" },
     "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
     input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
-    manifest: { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
+    manifest: { type: "string" }, "manifest-url": { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
+    "l1-execution-url": { type: "string" }, "l1-beacon-url": { type: "string" }, "max-safe-age": { type: "string" }, "max-l1-head-age": { type: "string" }, "max-l1-lag-blocks": { type: "string" }, "max-tip-lag-blocks": { type: "string" },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     "no-resize": { type: "boolean" },
@@ -214,9 +215,9 @@ async function main() {
       break;
     }
     case "recipes":
-      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for full mainnet snapshot import and sync jobs", profile: "reth-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
+      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for full Ethereum mainnet snapshot import and sync jobs", profile: "reth-synced" }, { name: "base-synced", purpose: "Pinned unified Base execution/rollup-consensus tool for managed Base mainnet sync", profile: "base-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
         { name: "foundry-symbolic", purpose: "Prebuilt Forge and Z3 for bounded symbolic properties; Linux x86_64, glibc >= 2.39", profile: "foundry-symbolic" },
-        ...["foundry", "reth", "tempo"].map((tool) => ({ name: `${tool}-source`, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: `${tool}-source` }))]);
+        ...Object.keys(sourceRecipes).map((name) => ({ name, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: name }))]);
       break;
     case "open": {
       if (!values.plan || !values.approve) throw new Error("Use a saved --plan with --approve; direct-open preparation was consolidated into saved plans.");

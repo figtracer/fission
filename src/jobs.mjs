@@ -28,7 +28,7 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   const spec = { id, commands, readiness, cwd, deadline, pollSeconds: 15 };
   if (state.task && id === "work") {
     const { probes } = await import("./readiness.mjs");
-    spec.checks = { scope: state.task.scope, checks: probes(state.recipe, state.task.scope, state.task.maxHeadAge) };
+    spec.checks = { scope: state.task.scope, checks: probes(state.recipe, state.task.scope, state.task.readiness || state.task.maxHeadAge) };
     spec.checkRunner = await readFile(new URL("../harness/readiness.py", import.meta.url), "utf8");
   }
   const runnerBytes = await readFile(runner);

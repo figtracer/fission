@@ -50,7 +50,8 @@ export async function report(name, id, options = {}) {
   const startedAt = iso(job?.observation?.startedAt), finishedAt = iso(job?.observation?.finishedAt);
   const value = {
     schemaVersion: 2, generatedAt,
-    ...(state.task ? { task: { harness: state.task.harness, mode: state.task.mode, outcome: state.task.outcome,
+    ...(state.task ? { task: { harness: state.task.harness, mode: state.task.mode,
+      ...(state.task.chain ? { chain: state.task.chain } : {}), outcome: state.task.outcome,
       timing: state.task.timing, deadline: state.task.deadline, command: state.task.command,
       inputs: state.task.inputs, artifacts: state.task.artifacts, exports: state.task.exports || [], lastError: state.task.lastError || null,
       cache: state.task.cache || null, experiment: state.task.experiment || null, guidance: state.task.guidance || null,

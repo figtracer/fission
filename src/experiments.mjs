@@ -42,7 +42,7 @@ export async function planOptions(options) {
   const result = { ...options, recipe: record.recipe, profile: record.profile };
   for (const [key, value] of Object.entries(requirements)) {
     if (mapped[key]) result[mapped[key]] = String(value);
-    else if (key !== "p2p" || record.profile !== "reth-synced" && record.profile !== "tempo-node")
+    else if (key !== "p2p" || !["reth-synced", "base-synced", "tempo-node"].includes(record.profile))
       throw new Error(`Unsupported recorded requirement: ${key}`);
   }
   if (record.source) { result.repo = record.source.url; result.ref = record.source.commit; }

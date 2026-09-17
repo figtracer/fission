@@ -32,8 +32,9 @@ export async function guidance(query = "", options = {}) {
   const ids = new Set(), postings = new Map();
   const tokens = (text) => new Set(text.toLowerCase().match(/[a-z0-9]+/g) || []);
   for (const entry of corpus.entries) {
-    const source = corpus.sources[entry.harness];
-    if (!source || !/^[a-f0-9]{40}$/.test(source.revision) || !source.repository.startsWith("https://github.com/") || ids.has(entry.id) || !entry.id.startsWith(entry.harness + "/") || !Array.isArray(entry.modes) || !Array.isArray(entry.tags))
+    const source = corpus.sources[entry.chain === "base" ? "base-reth" : entry.harness];
+    if (!source || !/^[a-f0-9]{40}$/.test(source.revision) || !source.repository.startsWith("https://github.com/") || ids.has(entry.id) || !entry.id.startsWith(entry.harness + "/") ||
+        entry.chain !== undefined && entry.chain !== "base" || !Array.isArray(entry.modes) || !Array.isArray(entry.tags))
       throw new Error("Invalid guidance ID, source revision or facets");
     ids.add(entry.id);
     for (const word of tokens([entry.id, entry.summary, ...entry.tags].join(" "))) {
@@ -42,9 +43,11 @@ export async function guidance(query = "", options = {}) {
     }
   }
   const words = tokens(query);
+  const requestedChain = options.harness === "reth" ? options.chain || "ethereum" : undefined;
   const entries = corpus.entries.filter((entry) => (!options.harness || entry.harness === options.harness) &&
-    (!options.mode || entry.modes.includes(options.mode)) && [...words].every((word) => postings.get(word)?.has(entry.id)));
-  const source = corpus.sources[options.harness];
+    (!requestedChain || (entry.chain || "ethereum") === requestedChain) && (!options.mode || entry.modes.includes(options.mode)) &&
+    [...words].every((word) => postings.get(word)?.has(entry.id)));
+  const source = corpus.sources[options.harness === "reth" && requestedChain === "base" ? "base-reth" : options.harness];
   return { schemaVersion: corpus.schemaVersion, revision: corpus.revision,
     sha256: createHash("sha256").update(bytes).digest("hex"), sources: corpus.sources, entries,
     requestedRevision: options.ref || null,

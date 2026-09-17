@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-09-15.1",
+  "revision": "2026-09-17.1",
   "sources": {
     "foundry": { "repository": "https://github.com/foundry-rs/foundry", "revision": "982849d3140c01fd3b72905759581a132df7aa98" },
     "reth": { "repository": "https://github.com/paradigmxyz/reth", "revision": "b2d7bd7f3fb04077f89f3368c6df9affdc8af095" },
+    "base-reth": { "repository": "https://github.com/base/base", "revision": "9f0d07ff9e18a798b07f610babd825b106f7b193" },
     "tempo": { "repository": "https://github.com/tempoxyz/tempo", "revision": "1ec5653e39c97e02807dddf5e7106e979f3ad909" }
   },
   "entries": [
@@ -15,6 +16,9 @@
     { "id": "reth/client-build", "harness": "reth", "modes": ["build"], "summary": "Build changed Reth with pinned source and native dependencies; compilation is not node readiness.", "tags": ["cargo", "source", "build", "llvm", "cache", "binary"], "guide": "harnesses/source-tests-and-builds" },
     { "id": "reth/development", "harness": "reth", "modes": ["dev"], "summary": "Private transaction and RPC behavior, verified against client version and genesis.", "tags": ["rpc", "transaction", "receipt", "genesis", "dev"], "guide": "harnesses/reth" },
     { "id": "reth/synced-ethereum", "harness": "reth", "modes": ["synced"], "summary": "Full-state Ethereum and paired consensus readiness; public gossip measurements need comparable peers and warm-up.", "tags": ["ethereum", "mainnet", "snapshot", "lighthouse", "sync", "gossip", "performance"], "guide": "reth" },
+    { "id": "reth/base-tests", "harness": "reth", "chain": "base", "modes": ["test"], "summary": "Test pinned Base-Reth source without building or starting a Base node first.", "tags": ["base", "reth", "cargo", "source", "test", "execution", "cli"], "guide": "harnesses/reth" },
+    { "id": "reth/base-build", "harness": "reth", "chain": "base", "modes": ["build"], "summary": "Build the Base-Reth execution binary from pinned source; compilation is not rollup or node validation.", "tags": ["base", "reth", "cargo", "source", "build", "binary", "execution"], "guide": "harnesses/reth" },
+    { "id": "reth/synced-base", "harness": "reth", "chain": "base", "modes": ["synced"], "summary": "Managed Base mainnet execution and rollup consensus with a pinned full snapshot and operator-supplied Ethereum L1 endpoints; live sync is unqualified.", "tags": ["base", "reth", "mainnet", "snapshot", "rollup", "consensus", "derivation", "l1", "sync"], "guide": "reth" },
     { "id": "tempo/native-transactions", "harness": "tempo", "modes": ["dev"], "summary": "Native envelopes, fee token/payer and nonce lanes on an isolated Tempo node.", "tags": ["tip20", "fee", "nonce", "sponsor", "batch", "0x76", "dev"], "guide": "harnesses/tempo" },
     { "id": "tempo/contract-model", "harness": "tempo", "modes": ["tools"], "summary": "Foundry's Tempo contract execution model, not native node or public consensus validation.", "tags": ["forge", "contract", "model", "simulation", "hardfork"], "guide": "harnesses/tempo" },
     { "id": "tempo/client-tests", "harness": "tempo", "modes": ["test"], "summary": "Test selected Tempo source crates without building the node first.", "tags": ["cargo", "source", "test", "bench", "pr"], "guide": "harnesses/source-tests-and-builds" },

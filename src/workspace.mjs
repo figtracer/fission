@@ -19,6 +19,7 @@ const preparationDeadline = (state) => state.task ? Math.min(
 export const sourceRecipes = {
   "foundry-source": ["forge", "cast", "anvil", "chisel"],
   "reth-source": ["reth"],
+  "base-reth-source": ["base-reth-node"],
   "tempo-source": ["tempo"],
 };
 
@@ -42,6 +43,17 @@ export async function recipe(input = "linux") {
         ["ufw", "status", "verbose"]],
       readiness: [["/workspace/.fission/clients/reth-2.5.2", "--version"], ["/workspace/.fission/clients/lighthouse-8.2.2", "--version"]],
       artifacts: ["/workspace/ethereum-tools.json"] };
+  } else if (input === "base-synced") {
+    const files = {};
+    for (const name of ["base-node.py", "base-ready.py"])
+      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
+    value = { name: input, description: "Prepare the pinned unified Base execution/rollup-consensus binary. Bootstrap does not import data or start the node.",
+      prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
+        ["python3", "/workspace/.fission/base-node.py", "install"],
+        ...["30303/tcp", "30303/udp", "9222/tcp", "9223/udp"].map((port) => ["ufw", "allow", port]),
+        ["ufw", "status", "verbose"]],
+      readiness: [["/workspace/.fission/clients/base-1.4.0", "--version"]],
+      artifacts: ["/workspace/base-tools.json"] };
   } else {
     const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
     const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;

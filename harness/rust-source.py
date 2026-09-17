@@ -347,8 +347,8 @@ def main():
     if mode == 'build':
         (root / 'build.json').unlink(missing_ok=True)
     source = pathlib.Path.cwd() if mode == 'build' else root / 'source'
-    if binaries not in [['forge', 'cast', 'anvil', 'chisel'], ['reth'], ['tempo']]:
-        raise ValueError('Select the Foundry, Reth or Tempo source recipe')
+    if binaries not in [['forge', 'cast', 'anvil', 'chisel'], ['reth'], ['base-reth-node'], ['tempo']]:
+        raise ValueError('Select the Foundry, Ethereum/Base Reth or Tempo source recipe')
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
         raise RuntimeError('The source harness requires Linux x86_64')
     if not (source / 'Cargo.lock').is_file():
