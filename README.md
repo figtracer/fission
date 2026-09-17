@@ -11,7 +11,7 @@ Fission is an early independent tool, not an official Tempo, Foundry, or Reth se
 | Harness | Use it for | Modes |
 | --- | --- | --- |
 | Foundry | Forge/Cast tests, fuzzing, invariants, bounded symbolic work, changed Foundry source | `tools`, `test`, `build` |
-| Reth | Isolated development-chain work, selected source tests, release builds, paired Ethereum sync | `dev`, `test`, `build`, `synced` |
+| Reth | Ethereum development/source/sync work, plus Base source and managed mainnet sync | `dev`, `test`, `build`, `synced` |
 | Tempo | Isolated node transactions, Foundry's Tempo contract model, source tests and builds | `dev`, `tools`, `test`, `build` |
 | Linux | Ordinary Linux x86_64 work that does not fit an ecosystem harness | `tools` |
 
@@ -58,6 +58,12 @@ fission run reth-network-tests --harness reth --mode test \
 
 Use `--patch ./change.patch` to apply one `git diff --binary HEAD` before testing or building. Clean release builds can use exact-identity caches stored locally, on mounted storage, or on an explicitly retained cache VPS. See [source tests, builds, and caches](docs/harnesses.md#source-tests-and-builds).
 
+### Base Reth
+
+Use `--chain base` with `test` or `build` for pinned [Base](https://github.com/base/base) source. Base `synced` preview validates an official content-pinned full snapshot plan, computes the multi-terabyte disk requirement, and requires credential-free Ethereum L1 execution and beacon origins. An approved run manages Base execution and rollup consensus together using the signed pinned unified binary and gates work on coherent, advancing unsafe and derived-safe state.
+
+Base source and synced contracts are fixture/local validated; a paid full snapshot restore and catch-up has not been run. Resource adequacy, restore duration, live sync, bridge finality, and production readiness are therefore unqualified. Base development mode and BSC are not supported. See [Synced Ethereum and Base](docs/reth.md#base-mainnet).
+
 ## Multiple machines
 
 Explicit paired or comparative work uses one JSON manifest. Each role remains an ordinary managed task with its own budget, supervisor, evidence, report, and cleanup:
@@ -77,7 +83,7 @@ The complete schema and partial-purchase behavior are in [Multiple machines](doc
 - [Harnesses](docs/harnesses.md) covers modes, source runs, caching, evidence, and multi-machine manifests.
 - [Workload guidance](docs/workloads.md) explains the revision-pinned taxonomy.
 - [Rental safety](docs/rental.md) covers authorization, lifecycle, and recovery.
-- [Synced Ethereum](docs/reth.md) covers Reth/Lighthouse inputs and readiness.
+- [Synced Ethereum and Base](docs/reth.md) covers snapshot inputs, dependencies, and readiness.
 - [Installation](docs/install.md) covers the current source-first setup.
 
 ## Installation
