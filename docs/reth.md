@@ -30,8 +30,6 @@ Import completion is not readiness: the full preset may require index reconstruc
 
 The guest binds RPC, Engine, and consensus APIs to loopback, protects JWT material, and opens the execution/consensus peer ports in UFW; provider filtering remains separate. No validator keys or staking are involved.
 
-Evidence from one September 14, 2026 Amsterdam run (16 vCPU, 128 GiB RAM, 3.2 TB nominal disk; 726,194,576,598 downloaded bytes; 962,683,657,146 output bytes) measured about 59m import, 40m28s index reconstruction, 2h41m from import start to readiness, and 3h39m from rental request to paired readiness. Network throughput was not measured; diagnostics/migration were included. This one sample is neither a guarantee nor a bound for another machine, snapshot, or date. A warm restart passed, while a later observation lost `consensusSynced`; continuous readiness is unproven.
-
 ## Candidate and retained data
 
 A synced workload may consume an explicitly supplied/built candidate, but database compatibility and migration risk remain experiment decisions. Preserve manifest/client pins, checkpoint provenance, readiness observations, command output, and small reports. The managed supervisor stops work, gathers bounded evidence, and tears down; do not declare cleanup from a missing response.
