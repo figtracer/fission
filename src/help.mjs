@@ -130,6 +130,7 @@ Usage: fission                     Open the Rust task dashboard
        fission status [NAME]       Progress, outcome, cost, evidence, cleanup
        fission stop NAME           Cancel work and request confirmed cleanup
        fission budget              Retained authorization (never reset history)
+       fission campaign expand     Expand a local seeded worker manifest
        fission help COMMAND        Focused syntax; COMMAND --help also works
 
 Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
@@ -141,6 +142,7 @@ Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
   if (key === "run") return `fission run — ${run}`;
+  if (key === "campaign") return `fission campaign — Expand a deterministic seeded campaign locally; this never reads the ledger, quotes, or purchases.\n\nUsage: fission campaign expand CAMPAIGN.json --output MANIFEST.json\n\nThe campaign declaration has schemaVersion 1, kind "campaign", workers, baseSeed,\nseedStride, budget, and a single worker template. Fission expands worker-0 through\nworker-N with seed = baseSeed + index × seedStride, replacing only whole argv\nelements {{seed}}, {{workerIndex}}, and {{workerCount}}. The template must include\n{{seed}}. The output is an ordinary schemaVersion 1 multi-machine manifest; inspect\nit, then use fission run NAME --from MANIFEST.json --budget CAMPAIGN_BUDGET.\n\nExpansion validates every worker locally, resolves template local paths relative to\nthe campaign file, refuses to overwrite output, and does not coordinate a shared\nfuzz corpus or authorize a purchase. Existing manifests remain unchanged.`;
   if (parts[0] === "index") return JSON.stringify(await guidance(parts.slice(1).join(" ")), null, 2);
   if (parts[0] === "run" && parts.length === 2 && Object.hasOwn(harnesses, parts[1]))
     return `${await help(["run"])}\n\n${await help([parts[1]])}`;

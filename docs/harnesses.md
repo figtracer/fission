@@ -98,3 +98,42 @@ Manual cache and Reth dataset operations remain advanced recovery. Inspect compa
 Use `fission run NAME --from FILE --budget TOTAL` for an explicitly chosen set of machines. The JSON file has `schemaVersion: 1` and `machines`, each with a role `name`, normal run options using their CLI spelling, and `command` argv. Per-role budgets sum within TOTAL and the retained ledger. There is no fixed machine-count ceiling. Preview quotes every role before any payment; `--approve` accepts the entire listed set.
 
 Each role becomes `NAME-ROLE`, with its own supervisor, evidence and confirmed cleanup. `status`, `stop` and `status --resume` accept either name. Purchases are sequential and cannot be atomic: if a later purchase fails, previously started tasks remain supervised and missing roles are reported. A group stop requested during creation waits for that approved prepaid purchase sequence to finish, then cancels every purchased member; it releases the creation lock before waiting on child operations. No restart or replacement is purchased. Stop the experiment if partial results are not useful. Separate machines are independently prepared; coordinating network services or synchronizing measurements belongs in the explicitly supplied experiment, not an implicit general-purpose cluster manager.
+
+### Seeded campaign expansion
+
+For independent seeded fuzz workers, compile one local campaign declaration into the
+ordinary manifest above before previewing a rental:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "campaign",
+  "workers": 4,
+  "baseSeed": "1000",
+  "seedStride": "1",
+  "budget": "2.000000",
+  "template": {
+    "harness": "foundry",
+    "budget": "0.500000",
+    "duration": "2h",
+    "work-duration": "10m",
+    "region": "ams",
+    "input": ["./fuzz.sh=/workspace/fuzz.sh"],
+    "artifact": ["/workspace/result.json"],
+    "command": ["bash", "/workspace/fuzz.sh", "{{seed}}", "{{workerIndex}}", "{{workerCount}}"]
+  }
+}
+```
+
+```sh
+fission campaign expand campaign.json --output workers.json
+fission run fuzz-campaign --from workers.json --budget 2.000000
+```
+
+Expansion is local, deterministic, and makes no quote, ledger, or provider request.
+It produces `worker-0` through `worker-N`, with `seed = baseSeed + index × seedStride`.
+Only whole command arguments `{{seed}}`, `{{workerIndex}}`, and `{{workerCount}}` are
+substituted; paths are resolved relative to the campaign declaration. Inspect the
+generated ordinary manifest before its normal non-paying `run` preview. This is not a
+distributed fuzzer: corpus sharing, result reduction, and finding deduplication remain
+explicit workload responsibilities.

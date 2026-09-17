@@ -96,14 +96,14 @@ async function main() {
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission status --json for task data.");
-  if (!advanced && !["ui", "run", "status", "stop", "help", "budget"].includes(command))
+  if (!advanced && !["ui", "run", "status", "stop", "help", "budget", "campaign"].includes(command))
     throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
     skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: ["plan", "approve"], stop: [], supervise: [],
     prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
-    dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir", "cache-workspace"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], job: ["refresh"], wait: ["duration", "max-spend"],
+    dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir", "cache-workspace"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], campaign: ["output"], job: ["refresh"], wait: ["duration", "max-spend"],
     exec: [], upload: [], download: [], close: ["output", "discard-output"], reconcile: [],
   };
   if (!advanced) {
@@ -112,7 +112,7 @@ async function main() {
   }
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
-  const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   arity.stop = 2; arity.supervise = 2;
   if (!advanced) { arity.run = 2; arity.status = name ? 2 : 1; }
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission help ${command}.`);
@@ -148,6 +148,14 @@ async function main() {
       if (["total-spend", "vm-max-spend", "raise-to"].some((key) => values[key] !== undefined) && !values.approve) throw new Error("Use --approve to record an authorized budget or VM ceiling.");
       if (values.profile && (!profiles[values.profile] || values["vm-max-spend"] === undefined)) throw new Error("Use a known --profile with --vm-max-spend.");
       emit(await budget(values["total-spend"], { vmMaxSpend: values["vm-max-spend"], profile: values.profile, raiseTo: values["raise-to"], approval: values.approval })); break;
+    case "campaign": {
+      if (name !== "expand" || !first || !values.output) throw new Error("Usage: fission campaign expand CAMPAIGN.json --output MANIFEST.json");
+      const { expandCampaign, writeCampaignManifest } = await import("./campaigns.mjs");
+      const { manifest, summary } = await expandCampaign(first);
+      const output = await writeCampaignManifest(values.output, manifest);
+      emit({ ...summary, output, next: `fission run NAME --from ${output} --budget ${summary.campaignBudget}` });
+      break;
+    }
     case "plan": {
       const value = await createPlan(name, values); emit(value);
       if (value.status === "unavailable") process.exitCode = 2;
