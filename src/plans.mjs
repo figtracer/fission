@@ -110,7 +110,9 @@ export function requirementsFor(options) {
     if (options[option] !== undefined) {
       const value = Number(options[option]);
       if (!Number.isFinite(value) || value <= 0) throw new Error(`--${option} must be positive.`);
-      requirements[field] = Math.max(requirements[field] || 0, value);
+      // Node capacities are planning defaults. Snapshot plans own actual disk
+      // sizing; explicit hardware requests may replace these estimates.
+      requirements[field] = ["reth-synced", "base-synced", "tempo-node"].includes(profile) ? value : Math.max(requirements[field] || 0, value);
     }
   }
   return { profile, requirements };
@@ -239,11 +241,11 @@ export async function createPlan(name, options, task) {
   if (options.from) options = await (await import("./experiments.mjs")).planOptions(options);
   const definition = await recipe(options.recipe || "linux");
   const recipeName = definition.name;
-  if (["reth-synced", "base-synced", "foundry-symbolic"].includes(recipeName)) {
+  if (task?.mode !== "custom" && ["reth-synced", "base-synced", "foundry-symbolic"].includes(recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error(`The ${recipeName} recipe requires its matching profile.`);
     options.profile = recipeName;
   }
-  if (Object.hasOwn(sourceRecipes, recipeName)) {
+  if (task?.mode !== "custom" && Object.hasOwn(sourceRecipes, recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
     if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");
     options.profile = recipeName;

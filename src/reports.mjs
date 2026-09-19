@@ -53,6 +53,7 @@ export async function report(name, id, options = {}) {
     ...(state.task ? { task: { harness: state.task.harness, mode: state.task.mode,
       ...(state.task.chain ? { chain: state.task.chain } : {}), outcome: state.task.outcome,
       timing: state.task.timing, deadline: state.task.deadline, command: state.task.command,
+      node: state.task.node, snapshot: state.task.snapshot, context: state.task.context, scope: state.task.scope, cwd: state.task.cwd, preparation: state.task.preparation,
       inputs: state.task.inputs, artifacts: state.task.artifacts, exports: state.task.exports || [], lastError: state.task.lastError || null,
       cache: state.task.cache || null, experiment: state.task.experiment || null, guidance: state.task.guidance || null,
       jobs: (await listJobs(name)).map((job) => ({ id: job.id, phase: job.phase, digest: job.digest, observation: job.observation })) } } : {}),

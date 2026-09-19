@@ -17,12 +17,13 @@ lists alternatives and failures. Current VM offers still share a single gateway.
 
 Options:
   --mode MODE             See harness help; test never builds release binaries first
+  --snapshot PRESET       Synced Reth/Base: minimal, full (default), archive
   --repo URL --ref SHA     Public GitHub source at a full commit; required for test/build
   --patch FILE            Apply git diff --binary HEAD once before source test/build
   --input FILE[=REMOTE]    Upload a regular file, repeatable; default /workspace/basename
   --artifact /workspace/F Collect an output file, repeatable (not a database)
   --cwd DIR               Guest cwd; default /workspace/source with repo, else /workspace
-  --cpu N --memory GiB --disk GiB  Raise harness resource floors
+  --cpu N --memory GiB --disk GiB  Set resources; selected snapshot disk remains a minimum
   --machine ID             Require one exact catalog machine; disables fallback
   --no-resize             Direct VM; required above 4 vCPU/8 GiB for short alpha tasks
   --cache-workspace NAME  Use an initialized retained VPS for clean build caches
@@ -33,6 +34,14 @@ Options:
 Ecosystem-specific options: fission help foundry, reth, or tempo.
 Source tasks inspect local caches before quotes. Binary cache candidates require
 exact guest verification; they are not Cargo test caches. See help harnesses.
+
+Task file: fission run NAME --from task.json --budget TOTAL [--approve]
+Use {schemaVersion: 1, task: {...run options, command: ["program", "arg"]}}.
+Choose a built-in harness, or supply an embedded recipe plus cpu, memory, disk,
+prepare-duration and scope. Custom recipes define guest preparation and named
+readiness checks; preparation argv run after uploads. See help harnesses/task-files.
+Budget is both required in the task and bounded by --budget. Paths resolve beside
+this file. Preview validates and quotes; document commands only execute on the VM.
 
 Multiple machines: fission run NAME --from experiment.json --budget TOTAL [--approve]
 The file supplies schemaVersion: 1 and machines: [{name, harness, mode, budget,
@@ -57,7 +66,7 @@ disk, and healthy initialization. The gateway exposes no provider upgrade-job ID
 an accepted resize remains unfinished until guest verification succeeds.
 
 Example (amount/duration must be authorized):
-  fission run check-a --harness foundry --budget 0.50 --duration 2h \\
+  fission run contract-check --harness foundry --budget 0.50 --duration 2h \\
     --work-duration 10m --region ams --input checks.py --approve -- python3 checks.py
 
 All data is JSON. --help before -- is local; flags after -- belong to the workload.
@@ -135,7 +144,7 @@ Usage: fission                     Open the Rust task dashboard
 
 Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
 Read help run first. No embedded agent runs in the VM.
-MPP/Tempo purchase path; x402 gateways not yet integrated. See help rental.
+MPP/Tempo purchase path. See help rental.
 --approve uses existing budget and duration authorization.
 Durations: s/m/h/d, at least 60s; provider availability and authorization bound leases.
 Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].

@@ -14,6 +14,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+from node_options import options, install_client
 
 ROOT = pathlib.Path('/workspace/base-data')
 TOOLS = pathlib.Path('/workspace/.fission/clients')
@@ -54,33 +55,38 @@ def public_origin(value, name):
     return value
 
 
-def install():
+def install(config):
     if platform.system() != 'Linux' or platform.machine() != 'x86_64' or not pathlib.Path('/run/systemd/system').is_dir():
         raise RuntimeError('Base synced mode requires a Linux x86_64 VM running systemd')
     ROOT.mkdir(exist_ok=True)
     TOOLS.mkdir(parents=True, exist_ok=True)
-    subprocess.run(['apt-get', 'update'], check=True)
-    subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates', 'curl', 'gnupg', 'tar'], check=True)
-    script = urllib.request.urlopen(BASEUP_URL, timeout=60).read()
-    if hashlib.sha256(script).hexdigest() != BASEUP_SHA256:
-        raise RuntimeError('Pinned Base release installer changed')
-    with tempfile.NamedTemporaryFile() as file:
-        file.write(script)
-        file.flush()
-        env = {**os.environ, 'BASE_BIN_DIR': str(TOOLS), 'BASEUP_HOME': str(ROOT / 'installer')}
-        subprocess.run(['bash', file.name, '--install', 'v1.4.0', '--bin', 'base'], env=env, check=True)
-    installed = TOOLS / 'base'
-    installed.replace(BASE)
-    BASE.chmod(0o500)
-    version = output([BASE, '--version'])
-    if version != 'base 1.4.0':
-        raise RuntimeError('Installed Base binary has an unexpected version')
+    write(ROOT / 'node-options.json', config)
+    if config.get('execution'):
+        install_client(config['execution'], BASE)
+        version = output([BASE, '--version'])
+    else:
+        subprocess.run(['apt-get', 'update'], check=True)
+        subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates', 'curl', 'gnupg', 'tar'], check=True)
+        script = urllib.request.urlopen(BASEUP_URL, timeout=60).read()
+        if hashlib.sha256(script).hexdigest() != BASEUP_SHA256:
+            raise RuntimeError('Pinned Base release installer changed')
+        with tempfile.NamedTemporaryFile() as file:
+            file.write(script)
+            file.flush()
+            env = {**os.environ, 'BASE_BIN_DIR': str(TOOLS), 'BASEUP_HOME': str(ROOT / 'installer')}
+            subprocess.run(['bash', file.name, '--install', 'v1.4.0', '--bin', 'base'], env=env, check=True)
+        installed = TOOLS / 'base'
+        installed.replace(BASE)
+        BASE.chmod(0o500)
+        version = output([BASE, '--version'])
+        if version != 'base 1.4.0':
+            raise RuntimeError('Installed Base binary has an unexpected version')
     wrapper = pathlib.Path('/workspace/base-node')
     wrapper.write_text('#!/bin/sh\nexec python3 /workspace/.fission/base-node.py "$@"\n')
     wrapper.chmod(0o700)
     write(pathlib.Path('/workspace/base-tools.json'), {'prepared': True, 'binary': {'path': str(BASE), 'sha256': digest(BASE), 'version': version},
-          'release': {'tag': 'v1.4.0', 'commit': '6767cc7cb11e43046014d405600d8d3c253abf70', 'archiveSha256': ARCHIVE_SHA256,
-                      'installerSha256': BASEUP_SHA256, 'gpgFingerprint': SIGNING_FINGERPRINT, 'signatureVerified': True},
+          'release': {'selectedAsset': config['execution'], 'signatureVerified': False} if config.get('execution') else {'tag': 'v1.4.0', 'commit': '6767cc7cb11e43046014d405600d8d3c253abf70', 'archiveSha256': ARCHIVE_SHA256,
+                      'installerSha256': BASEUP_SHA256, 'gpgFingerprint': SIGNING_FINGERPRINT, 'signatureVerified': not bool(config.get('execution')), 'selectedAsset': config.get('execution')},
           'snapshotImported': False, 'nodeStarted': False})
 
 
@@ -94,27 +100,29 @@ def download(args):
     if hashlib.sha256(raw).hexdigest() != args.sha256:
         raise RuntimeError('Manifest differs from the pre-quote sizing record')
     manifest = json.loads(raw)
-    if manifest.get('chain_id') != 8453 or manifest.get('storage_version') != 2 or manifest.get('block', 0) <= 0:
-        raise RuntimeError('Expected a Base mainnet V2 snapshot manifest')
+    if manifest.get('chain_id') != options(ROOT).get('chainId', 8453) or manifest.get('storage_version') != 2 or manifest.get('block', 0) <= 0:
+        raise RuntimeError('Expected a Base V2 snapshot matching the selected chain')
     source = urllib.parse.urlparse(args.manifest_url)
-    if source.scheme != 'https' or source.hostname != 'mainnet-v2-snapshots.base.org' or not re.fullmatch(r'/\d+/manifest\.json', source.path) or source.username or source.password or source.port or source.query or source.fragment:
+    if source.scheme != 'https' or not source.hostname or source.username or source.password or source.port or source.query or source.fragment:
         raise RuntimeError('Expected the immutable official Base manifest URL')
     saved = ROOT / 'manifest.json'
     with saved.open('xb') as file:
         file.write(raw)
     staging = ROOT / 'execution.partial'
-    command = [BASE, 'snapshot', 'download', '--chain', 'base', '--full', '--manifest-path', saved,
+    network = options(ROOT).get('network', 'mainnet')
+    snapshot_chain = {'mainnet': 'base', 'sepolia': 'base-sepolia', 'zeronet': 'base-zeronet'}.get(network, network)
+    command = [BASE, 'snapshot', 'download', '--chain', snapshot_chain, '--' + args.selection, '--manifest-path', saved,
                '--datadir', staging, '--non-interactive', '--logs.stdout.quiet']
     canonical = json.loads(output([*command, '--print-plan-json']))
     planned = read(pathlib.Path(args.plan))
     if canonical != planned:
-        raise RuntimeError('Canonical Base full plan differs from the pre-quote sizing input; download was not started')
+        raise RuntimeError('Canonical selected Base plan differs from the pre-quote sizing input; download was not started')
     required = canonical['totalDownloadSize'] + canonical['totalOutputSize'] + args.extra_disk_gib * 2**30
     available = shutil.disk_usage(ROOT).free
     if available < required:
         raise RuntimeError(f'Insufficient free space for Base snapshot: required {required} bytes, available {available} bytes')
-    record = {'manifestSha256': args.sha256, 'manifestUrl': args.manifest_url, 'block': canonical['block'], 'chainId': 8453,
-              'selection': 'full', 'storageVersion': 2, 'extraDiskGiB': args.extra_disk_gib, 'requiredFreeBytes': required,
+    record = {'manifestSha256': args.sha256, 'manifestUrl': args.manifest_url, 'block': canonical['block'], 'chainId': manifest['chain_id'],
+              'selection': args.selection, 'storageVersion': 2, 'extraDiskGiB': args.extra_disk_gib, 'requiredFreeBytes': required,
               'binary': tools['binary'], 'startedAt': time.time()}
     write(ROOT / 'snapshot-attempt.json', record)
     subprocess.run([*map(str, command), '--resumable', 'true'], check=True)
@@ -145,9 +153,12 @@ def stop():
 
 
 def probe_args(args):
+    config = options(ROOT)
     return [OBSERVER, '--l1-execution-url', args.l1_execution_url, '--l1-beacon-url', args.l1_beacon_url,
             '--max-head-age', args.max_head_age, '--max-safe-age', args.max_safe_age, '--max-l1-head-age', args.max_l1_head_age,
-            '--max-l1-lag-blocks', args.max_l1_lag_blocks, '--max-tip-lag-blocks', args.max_tip_lag_blocks]
+            '--max-l1-lag-blocks', args.max_l1_lag_blocks, '--max-tip-lag-blocks', args.max_tip_lag_blocks,
+            '--chain-id', config.get('chainId', 8453), '--l1-chain-id', config.get('l1ChainId', 1),
+            '--genesis-hash', config.get('genesisHash', '0xf712aa9241cc24369b143cf6dce85f0902a9731e70d66818a3a5845b296c73dd')]
 
 
 def start(args):
@@ -160,12 +171,14 @@ def start(args):
     public_origin(args.l1_execution_url, 'L1 execution URL')
     public_origin(args.l1_beacon_url, 'L1 beacon URL')
     subprocess.run(['python3', *map(str, probe_args(args)), '--dependencies-only'], check=True)
+    config = options(ROOT)
     attempt_id = str(uuid.uuid4())
     unit = 'fission-base-' + attempt_id
-    command = [BASE, '--chain', 'mainnet', 'rpc', '--datadir', ROOT / 'execution', '--http', '--http.addr', '127.0.0.1',
-               '--http.port', '8545', '--http.api', 'eth,net,web3', '--port', '30303', '--discovery.port', '30303',
+    command = [BASE, '--chain', config.get('network', 'mainnet'), 'rpc', '--datadir', ROOT / 'execution', '--http', '--http.addr', '127.0.0.1',
+               '--http.port', '8545', '--http.api', ','.join(dict.fromkeys(['eth','net','web3',*config.get('rpcModules',[])])), '--port', '30303', '--discovery.port', '30303',
                '--rpc.addr', '127.0.0.1', '--rpc.port', '9545', '--p2p.listen.tcp', '9222', '--p2p.listen.udp', '9223',
                '--l1-eth-rpc', args.l1_execution_url, '--l1-beacon', args.l1_beacon_url]
+    command += config.get('args', [])
     attempt = {'id': attempt_id, 'phase': 'startup_unknown', 'startedAt': time.time(), 'unit': unit,
                'command': [str(item) for item in command], 'environment': {'BASE_NODE_L1_TRUST_RPC': 'false'},
                'snapshot': snapshot, 'bounds': vars(args)}
@@ -199,20 +212,23 @@ def observe(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
-    actions.add_parser('install')
+    installer = actions.add_parser('install')
+    installer.add_argument('--options', default='{}')
     get = actions.add_parser('download')
     get.add_argument('--manifest', required=True); get.add_argument('--manifest-url', required=True)
     get.add_argument('--sha256', required=True); get.add_argument('--plan', required=True)
     get.add_argument('--extra-disk-gib', required=True, type=int)
+    get.add_argument('--selection', choices=['minimal', 'full', 'archive'], default='full')
     for name in ['start', 'status', 'wait']:
         sub = actions.add_parser(name)
         sub.add_argument('--l1-execution-url', required=True); sub.add_argument('--l1-beacon-url', required=True)
         sub.add_argument('--max-head-age', required=True, type=int); sub.add_argument('--max-safe-age', required=True, type=int)
         sub.add_argument('--max-l1-head-age', required=True, type=int); sub.add_argument('--max-l1-lag-blocks', required=True, type=int)
         sub.add_argument('--max-tip-lag-blocks', required=True, type=int)
+        sub.add_argument('--chain-id', type=int); sub.add_argument('--l1-chain-id', type=int); sub.add_argument('--genesis-hash')
     actions.add_parser('stop')
     args = parser.parse_args()
-    if args.action == 'install': install(); return
+    if args.action == 'install': install(json.loads(args.options)); return
     if args.action == 'download' and (args.extra_disk_gib <= 0 or not len(args.sha256) == 64): parser.error('Invalid snapshot bounds')
     if args.action in ['start', 'status', 'wait'] and (min(args.max_head_age, args.max_safe_age, args.max_l1_head_age) <= 0 or min(args.max_l1_lag_blocks, args.max_tip_lag_blocks) < 0): parser.error('Invalid readiness bounds')
     expected = None

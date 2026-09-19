@@ -8,7 +8,7 @@ import { refresh, reconcile, active, upload, download, close, operationCap, prep
 import { budget } from "./budget.mjs";
 import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
 import { harnesses, taskOptions } from "./harnesses.mjs";
-import { runTask, runMachines, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
+import { runTask, runFile, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 import { help } from "./help.mjs";
@@ -69,7 +69,7 @@ async function main() {
     patch: { type: "string" },
     "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
     input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
-    manifest: { type: "string" }, "manifest-url": { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
+    snapshot: { type: "string" }, manifest: { type: "string" }, "manifest-url": { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
     "l1-execution-url": { type: "string" }, "l1-beacon-url": { type: "string" }, "max-safe-age": { type: "string" }, "max-l1-head-age": { type: "string" }, "max-l1-lag-blocks": { type: "string" }, "max-tip-lag-blocks": { type: "string" },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
@@ -190,8 +190,8 @@ async function main() {
     case "jobs": emit((await listJobs(name)).map(jobSummary)); break;
     case "run": {
       if (!advanced) {
-        if (values.from && tail.length) throw new Error("The experiment file supplies each machine's argv; do not add a command after --.");
-        const result = values.from ? await runMachines(name, values) : await runTask(name, values, tail); emit(result);
+        if (values.from && tail.length) throw new Error("The task file supplies workload argv; do not add a command after --.");
+        const result = values.from ? await runFile(name, values) : await runTask(name, values, tail); emit(result);
         if (result.status === "unavailable") process.exitCode = 2;
         break;
       }

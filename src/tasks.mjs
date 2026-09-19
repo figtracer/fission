@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, processAlive, OperationLocked } from "./state.mjs";
 import { createPlan, openPlan } from "./plans.mjs";
-import { taskSpec, taskOptions } from "./harnesses.mjs";
+import { taskSpec, taskFileOptions } from "./harnesses.mjs";
 import { budget, units, amount } from "./budget.mjs";
 import { active, prepare, reconcile, refresh, close, upload, download, terminal, operationCap } from "./workspace.mjs";
 import { execute } from "./provider.mjs";
@@ -85,7 +85,7 @@ async function planTask(name, options, command, experiment) {
   const ledger = await budget();
   if (units(options.budget) > units(ledger.availableToAllocate)) throw new Error("Retained aggregate authorization cannot cover this task. No quote or purchase submitted.");
   if (experiment) task.experiment = experiment;
-  task.guidance = await guidance("", { ...options, mode: task.mode });
+  if (task.mode !== "custom") task.guidance = await guidance("", { ...options, mode: task.mode });
   if (["test", "build"].includes(task.mode)) {
     task.cache = await cachePreflight({ ...options, mode: task.mode }, definition);
     const candidate = task.cache.candidate;
@@ -139,32 +139,36 @@ export async function runTask(name, options, command) {
   });
 }
 
-// A multi-machine experiment is a set of ordinary tasks, not a second runtime.
+// Task files and multi-machine experiments normalize to ordinary managed tasks.
 // Every task keeps its own durable purchase/job/cleanup markers and shared ledger.
-export async function runMachines(name, options) {
+export async function runFile(name, options) {
   // Serialize namespace checks with single-task creation too: a task cannot hide
   // an experiment, and concurrent manifests cannot disagree about its members.
-  return creationLocked(() => createMachines(name, options));
+  return creationLocked(() => createFromFile(name, options));
 }
 
-async function createMachines(name, options) {
+async function createFromFile(name, options) {
   directory(name);
   const file = resolve(options.from), spec = await readJSON(file);
-  if (spec?.schemaVersion !== 1 || Object.keys(spec).some((key) => !["schemaVersion", "machines"].includes(key)) || !Array.isArray(spec.machines) || !spec.machines.length)
-    throw new Error("Experiment file requires schemaVersion 1 and a nonempty machines array; see help run.");
+  const single = spec && Object.hasOwn(spec, "task");
+  if (spec?.schemaVersion !== 1 || Object.keys(spec).some((key) => !["schemaVersion", single ? "task" : "machines"].includes(key)) ||
+      !single && (!Array.isArray(spec.machines) || !spec.machines.length))
+    throw new Error("Task file requires schemaVersion 1 and either task: {...} or a nonempty machines array; see help run.");
   if ((await list()).some((state) => state.name === name || state.task?.experiment?.name === name))
-    throw new Error("Experiment already recorded. Use status/stop on its tasks; never repeat a group purchase.");
+    throw new Error("Task or experiment already recorded. Use status/stop; never repeat a purchase.");
   const machines = [];
-  for (const entry of spec.machines) {
-    if (!entry || Object.keys(entry).some((key) => !["name", "command", ...taskOptions].includes(key)) || !Array.isArray(entry.command))
-      throw new Error("Each machine needs a role name, command argv, and run options; unknown fields reject.");
-    directory(entry.name);
-    const child = `${name}-${entry.name}`;
+  for (const entry of single ? [spec.task] : spec.machines) {
+    if (!entry || Array.isArray(entry) || Object.keys(entry).some((key) => ![...(single ? [] : ["name"]), "command", ...taskFileOptions].includes(key)) || !Array.isArray(entry.command))
+      throw new Error("Each task needs command argv and run options; machine groups also need role names. Unknown fields reject.");
+    if (!single) directory(entry.name);
+    const child = single ? name : `${name}-${entry.name}`;
     directory(child);
     if (machines.some((item) => item.name === child) || await readJSON(join(directory(child), "state.json")))
       throw new Error("Machine names must be unique and unused.");
     const { name: role, command, ...settings } = entry;
     for (const field of ["patch", "manifest", "snapshot-plan", "output"]) if (settings[field]) settings[field] = resolve(dirname(file), settings[field]);
+    if (settings.input !== undefined && (!Array.isArray(settings.input) || settings.input.some((item) => typeof item !== "string")))
+      throw new Error("input must be an array of file mappings.");
     if (settings.input) settings.input = settings.input.map((mapping) => {
       const i = mapping.indexOf("=");
       return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
@@ -178,6 +182,11 @@ async function createMachines(name, options) {
   const allocation = machines.reduce((sum, item) => sum + units(item.settings.budget), 0n);
   if (allocation > units(options.budget) || allocation > units((await budget()).availableToAllocate))
     throw new Error("Combined machine allocations exceed the experiment budget or retained authorization. No quote or purchase submitted.");
+  if (single) {
+    const machine = machines[0];
+    const preview = await planTask(name, machine.settings, machine.command);
+    return options.approve && preview.status !== "unavailable" ? openTask(name, preview.plan) : preview;
+  }
   const previews = [];
   const members = machines.map((item) => item.name);
   for (const machine of machines) previews.push(await planTask(machine.name, machine.settings, machine.command, { name, role: machine.role, members }));

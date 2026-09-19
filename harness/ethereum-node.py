@@ -1,4 +1,4 @@
-"""Prepare a full mainnet snapshot and explicitly control a lease-lived node pair."""
+"""Prepare the selected mainnet snapshot and explicitly control a lease-lived node pair."""
 import argparse
 import fcntl
 import hashlib
@@ -15,6 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+from node_options import options, install_client
 import tarfile
 
 ROOT = pathlib.Path('/workspace/ethereum-data')
@@ -46,17 +47,22 @@ def command(args):
     return subprocess.check_output([str(arg) for arg in args], text=True).strip()
 
 
-def install():
+def install(config):
     if platform.system() != 'Linux' or platform.machine() != 'x86_64' or not pathlib.Path('/run/systemd/system').is_dir():
         raise RuntimeError('This harness requires a Linux x86_64 VM running systemd')
     TOOLS.mkdir(parents=True, exist_ok=True)
     ROOT.mkdir(exist_ok=True)
+    write(ROOT / 'node-options.json', config)
     assets = [
         (RETH, 'reth', 'https://github.com/paradigmxyz/reth/releases/download/v2.5.2/reth-v2.5.2-x86_64-unknown-linux-gnu.tar.gz', 'e360895ac51b351ff0c44573f0f619bb1e7c3ff2df55502af1190c14c9b5ef6d'),
         (LIGHTHOUSE, 'lighthouse', 'https://github.com/sigp/lighthouse/releases/download/v8.2.2/lighthouse-v8.2.2-x86_64-unknown-linux-gnu.tar.gz', '334922e4b55075fbe86acaef3ce2a8e55699d2c647443e83cffed00f3babfaa8'),
     ]
     binaries = []
     for target, name, url, expected in assets:
+        override = config.get('execution' if name == 'reth' else 'consensus')
+        if override:
+            binaries.append(install_client(override, target))
+            continue
         data = urllib.request.urlopen(url, timeout=120).read()
         if hashlib.sha256(data).hexdigest() != expected:
             raise RuntimeError(name + ' archive digest mismatch')
@@ -86,8 +92,8 @@ def download(args):
     if hashlib.sha256(raw).hexdigest() != args.sha256:
         raise RuntimeError('Manifest differs from the pre-quote sizing record')
     manifest = json.loads(raw)
-    if manifest.get('chain_id') != 1 or manifest.get('storage_version') != 2 or not str(manifest.get('reth_version', '')).startswith('2.5.2 '):
-        raise RuntimeError('Expected an Ethereum mainnet V2 snapshot produced by Reth 2.5.2')
+    if manifest.get('chain_id') != 1 or manifest.get('storage_version') != 2 or not str(manifest.get('reth_version', '')).startswith(options(ROOT).get('execution', {}).get('version', '2.5.2') + ' '):
+        raise RuntimeError('Expected an Ethereum mainnet V2 snapshot matching the selected Reth version')
     source = urllib.parse.urlparse(manifest.get('base_url', ''))
     if source.scheme != 'https' or source.hostname != 'snapshots-r2.reth.rs' or source.username or source.password or source.port or source.query or source.fragment:
         raise RuntimeError('Use the official HTTPS Reth snapshot manifest')
@@ -101,12 +107,12 @@ def download(args):
     staging = ROOT / 'execution.partial'
     if staging.exists():
         raise RuntimeError('Existing snapshot staging requires explicit recovery')
-    argv = [RETH, 'download', '--chain', 'mainnet', '--manifest-path', saved_manifest, '--full', '--datadir', staging]
+    argv = [RETH, 'download', '--chain', 'mainnet', '--manifest-path', saved_manifest, '--' + args.selection, '--datadir', staging]
     plan = json.loads(command([*argv, '--print-plan-json', '--quiet']))
     if plan.get('schemaVersion') != 1 or plan.get('chainId') != 1 or plan.get('block') != manifest.get('block') or not plan.get('archives'):
         raise RuntimeError('Invalid canonical snapshot plan')
     if args.plan and read(pathlib.Path(args.plan)) != plan:
-        raise RuntimeError('Canonical full plan differs from the pre-quote sizing input; no snapshot download started')
+        raise RuntimeError('Canonical selected plan differs from the pre-quote sizing input; no snapshot download started')
     urls = [archive['url'] for archive in plan['archives']]
     if len(set(urls)) != len(urls) or any(not url.startswith(manifest['base_url'].rstrip('/') + '/') for url in urls):
         raise RuntimeError('Snapshot archives must be unique and remain under the official manifest base URL')
@@ -118,7 +124,7 @@ def download(args):
     available = shutil.disk_usage(ROOT).free
     if available < required:
         raise RuntimeError(f'Insufficient free space for compressed + extracted snapshot and the explicit extra allowance: required {required} bytes, available {available} bytes')
-    record = {'manifestSha256': args.sha256, 'block': plan['block'], 'chainId': 1, 'selection': 'full', 'storageVersion': 2,
+    record = {'manifestSha256': args.sha256, 'block': plan['block'], 'chainId': 1, 'selection': args.selection, 'storageVersion': 2,
               'importer': importer, 'extraDiskGiB': args.extra_disk_gib, 'requiredFreeBytes': required, 'startedAt': time.time()}
     write(ROOT / 'snapshot-attempt.json', record)
     subprocess.run([str(arg) for arg in [*argv, '--resumable', '--non-interactive']], check=True)
@@ -202,12 +208,15 @@ def start(args):
             os.fsync(file.fileno())
     if not re.fullmatch('[a-f0-9]{64}', jwt.read_text()):
         raise RuntimeError('Existing Engine API JWT is invalid; preserve the node state for inspection')
+    config = options(ROOT)
     attempt_id = str(uuid.uuid4())
     unit_names = ['fission-reth-' + attempt_id, 'fission-lighthouse-' + attempt_id]
     commands = [
-        [str(candidate), 'node', '--chain', 'mainnet', '--full', '--datadir', str(ROOT / 'execution'), '--ipcpath', str(ROOT / 'execution.ipc'), '--http', '--http.addr', '127.0.0.1', '--http.api', 'eth,net,web3', '--authrpc.addr', '127.0.0.1', '--authrpc.jwtsecret', str(jwt), '--port', '30303'],
+        [str(candidate), 'node', '--chain', 'mainnet', '--datadir', str(ROOT / 'execution'), '--ipcpath', str(ROOT / 'execution.ipc'), '--http', '--http.addr', '127.0.0.1', '--http.api', ','.join(dict.fromkeys(['eth','net','web3',*config.get('rpcModules',[])])), '--authrpc.addr', '127.0.0.1', '--authrpc.jwtsecret', str(jwt), '--port', '30303'],
         [str(LIGHTHOUSE), 'bn', '--network', 'mainnet', '--datadir', str(ROOT / 'consensus'), '--execution-endpoint', 'http://127.0.0.1:8551', '--execution-jwt', str(jwt), '--checkpoint-sync-url', args.checkpoint_url, '--wss-checkpoint', args.checkpoint, '--http', '--http-address', '127.0.0.1', '--http-port', '5052', '--port', '9000'],
     ]
+    commands[0] += config.get('args', [])
+    commands[1] += config.get('consensusArgs', [])
     attempt = {'id': attempt_id, 'phase': 'startup_unknown', 'startedAt': time.time(), 'units': unit_names, 'commands': commands,
                'snapshot': snapshot, 'reth': {'path': str(candidate), 'sha256': checksum, 'version': command([candidate, '--version']),
                'compatibility': 'candidate-unverified' if args.reth else 'pinned-baseline'}, 'checkpointUrl': args.checkpoint_url, 'checkpoint': args.checkpoint}
@@ -250,12 +259,14 @@ def observe(max_age):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
-    actions.add_parser('install')
+    installer = actions.add_parser('install')
+    installer.add_argument('--options', default='{}')
     get = actions.add_parser('download')
     get.add_argument('--manifest', required=True)
     get.add_argument('--sha256', required=True)
     get.add_argument('--plan', help='Managed pre-quote planner JSON; must match the pinned importer')
     get.add_argument('--extra-disk-gib', required=True, type=int)
+    get.add_argument('--selection', choices=['minimal', 'full', 'archive'], default='full')
     for name in ['start', 'restart', 'status', 'wait']:
         sub = actions.add_parser(name)
         sub.add_argument('--max-head-age', required=True, type=int)
@@ -270,7 +281,7 @@ def main():
     if args.action == 'download' and (args.extra_disk_gib <= 0 or not re.fullmatch('[a-f0-9]{64}', args.sha256)):
         parser.error('Use a positive explicit disk allowance and exact manifest SHA-256')
     if args.action == 'install':
-        install()
+        install(json.loads(args.options))
         return
     expected_attempt = None
     if args.action not in ['status', 'wait']:

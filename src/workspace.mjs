@@ -25,16 +25,36 @@ export const sourceRecipes = {
 
 export async function recipe(input = "linux") {
   let value;
-  if (typeof input === "object" && input !== null) value = input;
+  if (typeof input === "object" && input !== null && input.extends !== undefined) {
+    if (!["linux", "foundry", "foundry-symbolic", "reth", "reth-synced", "base-synced", "tempo", "tempo-node", ...Object.keys(sourceRecipes)].includes(input.extends))
+      throw new Error("Recipe extends must name a bundled setup.");
+    const { digest, ...base } = await recipe(input.extends);
+    const { extends: inherited, ...overrides } = input;
+    value = { ...base, ...overrides };
+    for (const field of ["prepare", "afterCheckout", "readiness", "checks", "artifacts"])
+      if (base[field] || overrides[field]) {
+        if (overrides[field] !== undefined && !Array.isArray(overrides[field])) throw new Error(`${field} must be an array.`);
+        value[field] = [...(base[field] || []), ...(overrides[field] || [])];
+      }
+  } else if (typeof input === "object" && input !== null) value = input;
   else if (input === "foundry-symbolic") {
     const { digest, ...foundry } = await recipe("foundry");
     value = { ...foundry, name: input, description: "Prebuilt Foundry 1.8.1 and Z3 5.1.0 for bounded symbolic tests; Linux x86_64, glibc >= 2.39. No source build.",
       prepare: [...foundry.prepare, ["python3", "-c", await readFile(new URL("../harness/foundry-symbolic.py", import.meta.url), "utf8")]],
       readiness: [...foundry.readiness, ["/workspace/z3", "--version"]],
       artifacts: ["/workspace/symbolic-tools.json"] };
+  } else if (input === "tempo-node") {
+    const tempo = await recipe("tempo"), files = {};
+    for (const name of ["tempo-node.py", "node_options.py"])
+      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
+    value = { name: input, description: "Verified Tempo binary with configurable managed node startup.",
+      prepare: [tempo.prepare[0], ["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
+        ["python3", "/workspace/.fission/tempo-node.py", "install"]],
+      readiness: [["/workspace/tempo", "--version"]], checks: [{ name: "tempo-node", scope: "node", argv: ["/workspace/tempo-node", "status"], result: "json" }],
+      artifacts: ["/workspace/tempo-tools.json", "/workspace/tempo-data/current.json"] };
   } else if (input === "reth-synced") {
     const files = {};
-    for (const name of ["ethereum-node.py", "ethereum-ready.py"])
+    for (const name of ["ethereum-node.py", "ethereum-ready.py", "node_options.py"])
       files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
     value = { name: input, description: "Prepare pinned Reth/Lighthouse tools and permit their P2P ports through UFW. Bootstrap does not import data or start nodes.",
       prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
@@ -45,7 +65,7 @@ export async function recipe(input = "linux") {
       artifacts: ["/workspace/ethereum-tools.json"] };
   } else if (input === "base-synced") {
     const files = {};
-    for (const name of ["base-node.py", "base-ready.py"])
+    for (const name of ["base-node.py", "base-ready.py", "node_options.py"])
       files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
     value = { name: input, description: "Prepare the pinned unified Base execution/rollup-consensus binary. Bootstrap does not import data or start the node.",
       prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
@@ -89,7 +109,7 @@ export function validateRecipe(value) {
   if (value.readiness !== undefined && !Array.isArray(value.readiness)) throw new Error("Readiness must be argv arrays.");
   if (value.afterCheckout !== undefined && !Array.isArray(value.afterCheckout)) throw new Error("afterCheckout must be argv arrays.");
   for (const args of [...value.prepare, ...(value.afterCheckout || []), ...(value.readiness || []), ...(value.checks || []).map((check) => check.argv)])
-    if (!Array.isArray(args) || !args.length || args.some((arg) => typeof arg !== "string" || arg.includes("\0")))
+    if (!Array.isArray(args) || !args.length || !args[0] || args.some((arg) => typeof arg !== "string" || arg.includes("\0")))
       throw new Error("Each preparation command must be an argv array.");
   const names = new Set();
   for (const path of value.artifacts) {

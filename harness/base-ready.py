@@ -16,6 +16,9 @@ parser.add_argument('--max-safe-age', required=True, type=int)
 parser.add_argument('--max-l1-head-age', required=True, type=int)
 parser.add_argument('--max-l1-lag-blocks', required=True, type=int)
 parser.add_argument('--max-tip-lag-blocks', required=True, type=int)
+parser.add_argument('--chain-id', type=int, default=8453)
+parser.add_argument('--l1-chain-id', type=int, default=1)
+parser.add_argument('--genesis-hash', default=BASE_GENESIS)
 parser.add_argument('--dependencies-only', action='store_true')
 args = parser.parse_args()
 
@@ -48,9 +51,9 @@ try:
     get(args.l1_beacon_url.rstrip('/') + '/eth/v1/beacon/headers/head')
     get(args.l1_beacon_url.rstrip('/') + '/eth/v1/beacon/blob_sidecars/head')
     checks = {
-        'l1Chain': number(rpc(args.l1_execution_url, 'eth_chainId')) == 1,
+        'l1Chain': number(rpc(args.l1_execution_url, 'eth_chainId')) == args.l1_chain_id,
         'l1Fresh': 0 <= now - number(l1_head['timestamp']) <= args.max_l1_head_age,
-        'l1BeaconNetwork': number(beacon_spec['DEPOSIT_CHAIN_ID']) == 1,
+        'l1BeaconNetwork': number(beacon_spec['DEPOSIT_CHAIN_ID']) == args.l1_chain_id,
         'l1BeaconData': True,
     }
     if args.dependencies_only:
@@ -69,9 +72,9 @@ try:
     output = rpc(args.rollup, 'optimism_outputAtBlock', [hex(number(safe['number']))])
     l1_current = number(sync['current_l1']['number'])
     checks.update({
-        'baseChain': number(rpc(args.execution, 'eth_chainId')) == 8453,
-        'baseGenesis': config['genesis']['l2']['hash'].lower() == BASE_GENESIS,
-        'rollupChains': number(config['l1_chain_id']) == 1 and number(config['l2_chain_id']) == 8453,
+        'baseChain': number(rpc(args.execution, 'eth_chainId')) == args.chain_id,
+        'baseGenesis': config['genesis']['l2']['hash'].lower() == args.genesis_hash.lower(),
+        'rollupChains': number(config['l1_chain_id']) == args.l1_chain_id and number(config['l2_chain_id']) == args.chain_id,
         'executionPeers': number(rpc(args.execution, 'net_peerCount')) > 0,
         'rollupPeers': number(peers['connectedGossip']) > 0,
         'executionSynced': rpc(args.execution, 'eth_syncing') is False,

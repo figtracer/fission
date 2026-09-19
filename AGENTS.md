@@ -1,6 +1,6 @@
 # Fission for agents
 
-Fission turns an authorized budget, duration, source/input, workload argv, and completion condition into one managed Linux run. Use the Foundry, Reth, or Tempo harness; use Linux only when none fits. The local agent chooses and interprets the experiment. Fission owns quote selection, provisioning, preparation/readiness, durable execution, evidence, and cleanup; it never embeds an LLM on the VM.
+Fission turns an authorized budget, duration, source/input, workload argv, and completion condition into one managed Linux run. Use Foundry, Reth, Tempo or Linux shortcuts where they fit; otherwise describe the environment in a managed task file (see docs/harnesses.md#task-files). Built-ins are defaults, not an allowlist. The local agent chooses and interprets the experiment. Fission owns quote selection, provisioning, preparation/readiness, durable execution, evidence, and cleanup; it never embeds an LLM on the VM.
 
 ## Normal workflow
 

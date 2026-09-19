@@ -11,6 +11,115 @@ Without `--approve`, this is a non-paying preview. The approved run prepares and
 
 TOTAL must cover 30m provisioning + preparation (10m prebuilt, 1h source, or 4h synced) + WORK + 15m cleanup. These allowances are estimates, not guarantees; the preview carries dated evidence and uncertainty. `--prepare-duration` can raise, never lower, preparation time. Multi-day durations are allowed when the provider quotes a sufficient lease and the user authorizes its cost and duration.
 
+## Task files
+
+The agent can write one task file and use the same preview/approval flow:
+
+```sh
+fission run contract-check --from ./task.json --budget 0.50
+fission run contract-check --from ./task.json --budget 0.50 --approve
+fission status contract-check --wait 10m
+```
+
+Use `{"schemaVersion":1,"task":{...}}`. A task contains normal run options and
+`command` argv. Built-ins are shortcuts: use `harness` and `mode` for their defaults,
+or an embedded `recipe` for the exact software and configuration the task needs.
+Custom tasks explicitly specify CPU, RAM/disk in GiB, preparation allowance and
+readiness. For example:
+
+```json
+{
+  "schemaVersion": 1,
+  "task": {
+    "recipe": {
+      "name": "project-linux",
+      "prepare": [],
+      "checks": [{"name":"prepared-input", "scope":"tools", "argv":["test","-f","/workspace/ready.txt"], "result":"exit"}],
+      "artifacts": []
+    },
+    "cpu": 1, "memory": 2, "disk": 25,
+    "duration": "2h", "prepare-duration": "10m", "work-duration": "10m",
+    "budget": "0.50", "region": "ams",
+    "input": ["./input.txt"],
+    "preparation": [["cp","/workspace/input.txt","/workspace/ready.txt"]],
+    "command": ["sha256sum","/workspace/ready.txt"],
+    "artifact": ["/workspace/ready.txt"]
+  }
+}
+```
+
+Execution order is recipe `prepare`, optional pinned source checkout and
+`afterCheckout`, input upload, task `preparation`, fresh readiness, then `command`.
+Every command is guest argv. File loading and preview never execute those commands
+on the local machine. `scope` defaults to `tools`; every matching named check must
+pass before work. `result: "exit"` requires exit zero; `result: "json"` additionally
+requires the readiness runner's structured result (`ready: true`). Use bounded
+preparation commands to wait for syncing; the final readiness observation is capped
+at two minutes. The preparation deadline covers provisioning, bootstrap and upload
+as well as custom preparation.
+
+Custom recipes use the existing recipe fields: `name`, `description`, `prepare`,
+`afterCheckout`, `readiness`, `checks`, and `artifacts`. `context` can describe the
+requested environment. Inputs are fingerprinted and rechecked before upload;
+relative local paths resolve beside the task file. Keep versions, configuration,
+dataset identity and readiness assertions explicit. Built-in node options cover snapshot selections and client configuration. Extend
+a recipe when a different topology needs additional services. Custom
+preparation timings are operator estimates with zero measured samples unless
+supported separately by an experiment record.
+
+The task's budget must fit the command's total cap and retained authorization.
+`--approve` uses the existing supervisor, evidence and confirmed-cleanup machinery.
+The same task fields work in each role of a multi-machine manifest. No extra
+lifecycle commands are needed.
+
+## Node configuration
+
+Keep one managed run. Use ordinary flags for common choices, and `node` in a task
+file for detailed client configuration:
+
+| Setting | Meaning |
+| --- | --- |
+| `snapshot` | Reth/Base import selection: `minimal`, `full` (default), `archive`. |
+| `node.args`, `node.consensusArgs` | Upstream argv; separate consensus arguments apply to Ethereum's Lighthouse. |
+| `node.rpcModules` | Additional local RPC modules, such as `debug` or `trace`. |
+| `node.execution`, `node.consensus` | Exact release asset: HTTPS `url`, verified `sha256`, executable basename and `version`. Guest verifies archive, binary and reported version. |
+| `node.checks` | Additional named `node` readiness checks using the recipe check format. All built-in checks still run. |
+| `node.network` | Base network or Tempo chain name/uploaded genesis path. |
+| `node.chainId` | Expected chain identity; known network defaults are supplied. |
+| `node.l1ChainId`, `node.genesisHash` | Base's expected L1 and genesis identities; resolve explicitly outside mainnet. |
+| `node.role`, `node.upstream` | Tempo `dev`, `rpc`, `validator`, or `custom`; optional follower WebSocket URL. |
+| `node.retention` | Tempo `minimal`, `full`, or `archive`; omitted uses the selected client's default. |
+
+For example, these fields inside a Reth synced task request archive import and
+historical RPC modules; supply the manifest/plan, checkpoint, time, budget and
+workload alongside them:
+
+```json
+{"harness":"reth","mode":"synced","snapshot":"archive",
+ "node":{"rpcModules":["debug","trace"],
+         "args":["--txpool.pending-max-count","20000"]}}
+```
+
+Fission owns data paths, chain identity, pruning selection, process lifetime and
+observation endpoints. Configure those through their fields; ordinary upstream
+flags pass through unchanged. Check the selected client's help before preview.
+CPU/RAM for synced and Tempo node tasks are configurable planning defaults;
+snapshot disk must still fit compressed + expanded data and the scratch allowance.
+
+Tempo public node mode requires explicit CPU/RAM/disk, `prepare-duration`, and
+`max-head-age`. The RPC role uses the client's certified follower mode. Validator
+and custom roles require additional role checks; validator startup also needs an
+already provisioned signing-key path and network configuration. Never put key
+contents in argv or reports. Native development startup is measured locally;
+public synchronization and participation need their own evidence.
+
+Built-in tasks also accept `preparation` argv after inputs are uploaded and before
+import/start. For a different service layout, an embedded recipe can use
+`"extends":"foundry"`, `"reth-synced"`, `"base-synced"`, `"tempo-node"` or another
+bundled recipe. Preparation, checks and artifacts append to the inherited arrays;
+scalar fields override them. Custom tasks retain explicit resources, preparation,
+scope and workload. There is still only one supervisor and cleanup path.
+
 ## Foundry
 
 Modes: `tools` for pinned Forge/Cast contract work; `test` for testing changed Foundry crates; `build` when release binaries are needed. **Foundry-only option:** `--solver z3` adds the pinned solver to tools mode. It is absent from generic run help and rejected for other harnesses. A symbolic `pass` is bounded by reported assumptions/model; accept a violation only with replay-confirmed counterexample; timeout, unsupported behavior, all-revert paths, solver errors, and zero meaningful exploration are incomplete.
@@ -71,17 +180,17 @@ Base source mode uses a pinned public checkout such as the authoritative `https:
 
 For example, a source test can execute `/workspace/cargo test --locked -p base-execution-cli --lib tests::parse_dev -- --exact`, then confirm that one intended test ran. This checks Base's CLI/dev-chain parser in source; it does not start or validate a Base node. A build can invoke any bounded workload after Fission has produced and verified `/workspace/base-reth-node`.
 
-Base `dev` remains unavailable. A standalone execution client in development mode does not provide Base rollup consensus, L1 derivation or bridge/finality behavior. Base `synced` uses the signed, pinned unified Base binary to manage execution and rollup consensus together, restores a content-pinned full snapshot, verifies the operator's Ethereum execution/beacon dependencies, and gates work on coherent advancing unsafe and derived-safe state. Do not label Base source tests, compilation, a standalone dev process or a Base fork simulation as Base node or consensus validation.
+Base `dev` remains unavailable. A standalone execution client in development mode does not provide Base rollup consensus, L1 derivation or bridge/finality behavior. Base `synced` uses the signed, pinned unified Base binary to manage execution and rollup consensus together, restores the selected content-pinned snapshot, verifies the operator's Ethereum execution/beacon dependencies, and gates work on coherent advancing unsafe and derived-safe state. Do not label Base source tests, compilation, a standalone dev process or a Base fork simulation as Base node or consensus validation.
 
 Transaction-fetcher/gossip unit and local-peer integration tests need no Ethereum snapshot. Synced public-peer performance is a different experiment: prepare comparable baseline/candidate nodes, wait for paired readiness and peer warm-up, and retain raw metrics. A two-machine manifest does not automatically supply peer wiring, compatible databases or statistical comparability.
 
 For Ethereum dev, record client version, genesis hash, chain ID, transactions/receipts, nonces and before/after state. Both bundled dev chains use chain ID 1337, so chain ID alone is insufficient. Reth dev mines on transactions; an idle head need not advance. Compilation proves neither sync nor consensus.
 
-Ethereum synced mode requires the canonical manifest and full planner JSON, a separately verified recent checkpoint root/epoch and HTTPS URL, explicit head-age bound, and extra disk allowance. Base synced mode instead requires a pinned Base manifest URL/local file, its canonical full plan, credential-free operator L1 endpoints and explicit unsafe/safe/L1 freshness and lag bounds. Read [reth.md](reth.md); the managed run performs import, startup, readiness and cleanup.
+Ethereum synced mode requires the canonical manifest and selected planner JSON, a separately verified recent checkpoint root/epoch and HTTPS URL, explicit head-age bound, and extra disk allowance. Base synced mode instead requires a pinned Base manifest URL/local file, its canonical selected plan, credential-free operator L1 endpoints and explicit unsafe/safe/L1 freshness and lag bounds. Read [reth.md](reth.md); the managed run performs import, startup, readiness and cleanup.
 
 ## Tempo
 
-Modes: `dev` for an isolated Tempo node, `tools` for Foundry's Tempo contract model, `test` for changed source tests/benchmarks, and `build` for release binaries. Tools mode is simulation, not a Tempo node or transaction-envelope/consensus test.
+Modes: `dev` for an isolated Tempo node, `tools` for Foundry's Tempo contract model, `test` for changed source tests/benchmarks, `build` for release binaries, and `node` for configurable development/public nodes. Tools mode is simulation, not a Tempo node or transaction-envelope/consensus test.
 
 For dev transactions, inspect TIP-20 balances and the receipt's actual fee token/payer; `eth_getBalance` in the pinned development client is a compatibility placeholder. Require the intended raw/receipt transaction type, inclusion, nonce lane, state deltas, and fee-transfer evidence. An estimation error is not an included revert. Keep development keys isolated and out of persisted argv. A development chainspec may expose behavior absent from public networks.
 
