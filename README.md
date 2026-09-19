@@ -10,12 +10,8 @@ Foundry, Reth and Tempo provide built-in setup. Task files can describe other
 software, node configurations, inputs and readiness checks using the same lifecycle.
 
 ```sh
-fission                                      # Open the Rust dashboard
-fission run contract-check --from task.json --budget 2  # Preview without payment
-fission run contract-check --from task.json --budget 2 --approve
-fission status contract-check --wait 10m
-fission stop contract-check                         # Finish early and clean up
-fission help
+fission       # Open the Rust dashboard
+fission help  # Explore commands
 ```
 
 The task includes its own budget, resource requirements, preparation allowance and
