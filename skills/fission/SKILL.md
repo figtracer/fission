@@ -17,7 +17,7 @@ Route by intent:
 
 - **Contract test, fuzz, invariant, or symbolic property:** Foundry `tools` (use `--solver z3` only for symbolic work).
 - **Test a changed client source:** the ecosystem's `test` mode. **Need a release binary:** `build` mode. Test mode avoids spending WORK time compiling release binaries first.
-- **Isolated transaction/RPC or native-envelope behavior:** supported `dev` mode. Foundry's Tempo tools model is not a Tempo node.
+- **Isolated transaction/RPC or native-envelope behavior:** use `dev` for defaults. For configured Tempo development nodes (including retention), use `--harness tempo --mode node --chain dev` with task-file `node` options. Foundry's Tempo tools model is not a Tempo node.
 - **Synced node, mainnet state, or historical queries:** resolve chain, required methods/data and block range, then use the gate below.
 - **Other configuration or bounded Linux task:** use a custom task recipe when the built-ins do not fit; the Linux shortcut supplies a plain environment. Analysis of supplied historical exports can be ordinary bounded work; Linux tools readiness does not establish a synced or archive node.
 
@@ -95,7 +95,7 @@ fission run NAME --harness HARNESS --mode MODE --budget AMOUNT \
 
 Preview without `--approve`; it does not pay. Inspect the quote, retained authorization, resource/disk sizing, timing evidence and uncertainty, lifecycle headroom, fallback candidates, and source/outputs. Repeat the identical command with `--approve` only when it is already authorized.
 
-When selected resources exceed public-alpha automatic-resize limits, use `--no-resize`; it directly prepays at least a day without extending the requested task deadline. Total duration must cover 30m provisioning, 4h synced preparation, WORK, and 15m cleanup; these are policy allowances, not guarantees.
+When selected resources exceed public-alpha automatic-resize limits, use `--no-resize`; it directly prepays at least a day without extending the requested task deadline. Total duration must cover 30m provisioning, the selected mode's preparation allowance, WORK, and 15m cleanup. Use the allowance in the preview: ordinary prebuilt tools do not require four hours of syncing. These are policy allowances, not guarantees.
 
 For test/build use a public GitHub `--repo`, full 40-character `--ref`, and optional one-time `--patch`. Use `--input FILE[=/workspace/path]` for workload files and `--artifact /workspace/file` for bounded results. Reject vacuous tests.
 
