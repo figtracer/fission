@@ -7,16 +7,16 @@ quotes, setup, execution and cleanup, with built-in Foundry, Reth and Tempo
 environments. Use SSH yourself or run tasks across multiple machines. Payments
 use MPP on Tempo.
 
-Requires Node.js 22.13+, Rust and SSH. Clone with an account that has repository access:
+Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.2.0)
+and verify its checksum ([installation guide](docs/install.md)). Requires Node.js 22.13+ and SSH.
 
 ```sh
-git clone https://github.com/figtracer/fission.git
-cd fission
-npm run setup
+npm install -g ./fission-0.2.0-PLATFORM.tgz --ignore-scripts
+fission advanced skill install
 fission
 ```
 
-Setup installs the CLI, Rust dashboard and agent skill. Configure your
+The package includes the Rust dashboard and agent skill. Configure your
 [Tempo wallet](https://docs.tempo.xyz/cli) before buying a machine.
 
 Tell your agent: **“Get me a Linux machine within this budget”** or

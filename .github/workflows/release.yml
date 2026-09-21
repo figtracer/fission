@@ -19,10 +19,18 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: rustup toolchain install 1.98.1 --profile minimal
       - run: npm run package
         env:
-          RUSTUP_TOOLCHAIN: 1.98.0
+          RUSTUP_TOOLCHAIN: 1.98.1
+      - name: Verify packaged installation
+        run: |
+          npm install --offline --ignore-scripts --prefix "$RUNNER_TEMP/fission-install" ./dist/*.tgz
+          cli="$RUNNER_TEMP/fission-install/node_modules/fission/src/cli.mjs"
+          node "$cli" help
+          node "$cli" help rent
+          node "$cli" advanced skill install --output "$RUNNER_TEMP/fission-skill"
+          test -x "$RUNNER_TEMP/fission-install/node_modules/fission/tui/target/release/fission-tui"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: package-${{ matrix.runner }}
@@ -40,10 +48,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Publish prerelease
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
-          gh release create "v$version" dist/* --target "$GITHUB_SHA" --prerelease \
+          gh release create "v$version" dist/* --target "$GITHUB_SHA" --latest \
             --title "Fission v$version" --notes-file docs/release-notes.md
