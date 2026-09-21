@@ -2,7 +2,7 @@
   "name": "fission",
   "version": "0.1.6",
   "private": true,
-  "description": "Temporary compute for your coding agent.",
+  "description": "Rent machines and run tasks with your coding agent.",
   "type": "module",
   "bin": {
     "fission": "src/cli.mjs"

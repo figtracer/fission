@@ -8,6 +8,7 @@ import { taskStatus, stopTask, resumeTask } from "./tasks.mjs";
 import { units, amount } from "./budget.mjs";
 import { providerWarning } from "./provider.mjs";
 import { storage } from "./storage.mjs";
+import { sshReady } from "./compute.mjs";
 import { availableMachines, quoteMachine } from "./ui-catalog.mjs";
 import { providers } from "./plans.mjs";
 
@@ -55,10 +56,10 @@ async function main() {
       name: state.name,
       phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
       managed: Boolean(task), experiment: task?.experiment || null,
-      taskDetail: task ? `${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
+      taskDetail: task ? `${task.kind === "rental" ? "rental | " : ""}${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
       active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
-      ssh: state.provider === "compute-mpp" && state.phase === "ready" && !state.resizePending,
-      requested: state.requestedAt || "", expiry: Math.floor((state.task?.deadline || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,
+      ssh: sshReady(state) && (task?.kind !== "rental" || task.ready),
+      requested: state.requestedAt || "", expiry: Math.floor(((task?.usableUntil ? Date.parse(task.usableUntil) : state.task?.deadline) || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,
       estimated: !task && !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
       capacity: capacity?.cpu ? `${capacity.cpu} vCPU / ${capacity.memoryGiB} GiB RAM / ${Math.floor(capacity.diskGiB)} GiB disk` : "unreserved sandbox",
       started: date(state.requestedAt), ended: date(finished ? state.closedAt : task?.deadline || state.providerExpiresAt || state.deadlineEstimate),

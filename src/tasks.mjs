@@ -11,6 +11,7 @@ import { active, prepare, reconcile, refresh, close, upload, download, terminal,
 import { execute } from "./provider.mjs";
 import { launch, listJobs, getJob, jobDone } from "./jobs.mjs";
 import { report } from "./reports.mjs";
+import { check } from "./readiness.mjs";
 import { fingerprint } from "./experiments.mjs";
 import { cachePreflight, buildCache, stageCacheInput } from "./cache.mjs";
 import { guidance } from "./onboarding.mjs";
@@ -85,7 +86,7 @@ async function planTask(name, options, command, experiment) {
   const ledger = await budget();
   if (units(options.budget) > units(ledger.availableToAllocate)) throw new Error("Retained aggregate authorization cannot cover this task. No quote or purchase submitted.");
   if (experiment) task.experiment = experiment;
-  if (task.mode !== "custom") task.guidance = await guidance("", { ...options, mode: task.mode });
+  if (task.mode !== "custom" && task.harness !== "linux") task.guidance = await guidance("", { ...options, harness: task.harness, mode: task.mode });
   if (["test", "build"].includes(task.mode)) {
     task.cache = await cachePreflight({ ...options, mode: task.mode }, definition);
     const candidate = task.cache.candidate;
@@ -105,7 +106,7 @@ async function planTask(name, options, command, experiment) {
     cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
     "no-resize": options["no-resize"] }, task);
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
-  const preview = { name, plan: plan.id, paymentSubmitted: false, harness: task.harness, mode: task.mode,
+  const preview = { name, plan: plan.id, paymentSubmitted: false, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode,
     ...(task.chain ? { chain: task.chain } : {}),
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
@@ -156,16 +157,20 @@ async function createFromFile(name, options) {
     throw new Error("Task file requires schemaVersion 1 and either task: {...} or a nonempty machines array; see help run.");
   if ((await list()).some((state) => state.name === name || state.task?.experiment?.name === name))
     throw new Error("Task or experiment already recorded. Use status/stop; never repeat a purchase.");
+  if (options.kind === "rental" && !single) throw new Error("Rent accepts one task per file; use separate named rentals.");
   const machines = [];
   for (const entry of single ? [spec.task] : spec.machines) {
-    if (!entry || Array.isArray(entry) || Object.keys(entry).some((key) => ![...(single ? [] : ["name"]), "command", ...taskFileOptions].includes(key)) || !Array.isArray(entry.command))
+    const rental = options.kind === "rental" || entry?.kind === "rental";
+    if (rental && !single) throw new Error("Rental files accept one task; use separate named rentals.");
+    if (!entry || Array.isArray(entry) || Object.keys(entry).some((key) => ![...(single ? [] : ["name"]), "command", ...taskFileOptions].includes(key)) || (!(rental && entry.command === undefined) && !Array.isArray(entry.command)))
       throw new Error("Each task needs command argv and run options; machine groups also need role names. Unknown fields reject.");
     if (!single) directory(entry.name);
     const child = single ? name : `${name}-${entry.name}`;
     directory(child);
     if (machines.some((item) => item.name === child) || await readJSON(join(directory(child), "state.json")))
       throw new Error("Machine names must be unique and unused.");
-    const { name: role, command, ...settings } = entry;
+    const { name: role, command = rental ? [] : undefined, ...settings } = entry;
+    if (rental) settings.kind = "rental";
     for (const field of ["patch", "manifest", "snapshot-plan", "output"]) if (settings[field]) settings[field] = resolve(dirname(file), settings[field]);
     if (settings.input !== undefined && (!Array.isArray(settings.input) || settings.input.some((item) => typeof item !== "string")))
       throw new Error("input must be an array of file mappings.");
@@ -203,14 +208,14 @@ async function createFromFile(name, options) {
 export function nextTaskStep(state, jobs, now = Date.now()) {
   const task = state.task;
   if (!task) return "legacy";
-  if (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) return task.report ? "done" : "report";
+  if (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) return task.kind === "rental" ? task.completedAt ? "done" : "finalize" : task.report ? "done" : "report";
   if (!state.remoteId) return "reconcile";
   if (state.phase === "termination_unknown") return "confirm";
   const cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - task.timing.cleanupSeconds * 1000;
   if (task.outcome || task.stopRequestedAt || now >= cutoff) return "finish";
   if (state.phase === "prepare_failed") return "finish";
   const prepDeadline = Date.parse(state.requestedAt) + (task.timing.provisioningSeconds + task.timing.preparationSeconds) * 1000;
-  if (!jobs.some((job) => job.id === "work") && now >= prepDeadline) return "finish";
+  if (!(task.kind === "rental" && task.readyAt) && !jobs.some((job) => job.id === "work") && now >= prepDeadline) return "finish";
   if (!state.bootstrapJob) return "prepare";
   const bootstrap = jobs.find((job) => job.id === (state.repairJob || state.bootstrapJob));
   if (!bootstrap || !jobDone(bootstrap) || bootstrap.phase === "succeeded" && state.phase !== "ready") return "bootstrap";
@@ -220,6 +225,7 @@ export function nextTaskStep(state, jobs, now = Date.now()) {
   if (task.preparation.length && !preparation) return "launch-preparation";
   if (preparation && !jobDone(preparation)) return "preparation";
   if (preparation && preparation.phase !== "succeeded") return "finish";
+  if (task.kind === "rental") return task.readyAt ? "ready" : "readiness";
   const work = jobs.find((job) => job.id === "work");
   if (!work) return "launch-work";
   return jobDone(work) ? "finish" : "work";
@@ -235,7 +241,13 @@ export async function taskStatus(name, expectedExperiment) {
     cleanupConfirmed: terminal(state), note: state.cacheHost ? "Retained VPS-backed build cache; use advanced cache/status/close." : "Retained workspace; use advanced for recovery." };
   const jobs = await listJobs(name), owner = await readJSON(ownerPath(name));
   const record = task.report?.record ? await readJSON(task.report.record) : null;
-  return { name, harness: task.harness, mode: task.mode, phase: nextTaskStep(state, jobs), outcome: task.outcome || null,
+  const phase = nextTaskStep(state, jobs);
+  const ready = phase === "ready" && !task.accessError;
+  const usableUntil = Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate) || task.deadline) - task.timing.cleanupSeconds * 1000;
+  return { name, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode, phase, outcome: task.outcome || null,
+    ...(task.kind === "rental" ? { ready, readyAt: task.readyAt || null, ssh: ready ? `fission ssh ${name}` : null,
+      usableUntil: new Date(usableUntil).toISOString(),
+      closeReason: task.closeReason || null, accessError: task.accessError || null } : {}),
     supervisor: { pid: owner?.pid || null, alive: Boolean(owner && processAlive(owner.pid)), lastObservedAt: task.observedAt || null },
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
     accessObservations: state.accessObservations || [], initialization: state.initialization || null,
@@ -293,7 +305,10 @@ export async function stopTask(name, expectedExperiment) {
 
 async function finish(name, jobs) {
   let state = await update(name, (task, state) => {
-    task.outcome ??= task.stopRequestedAt ? "cancelled" : jobs.find((job) => job.id === "work" && jobDone(job))?.phase ||
+    if (task.kind === "rental") {
+      task.closeReason ??= task.stopRequestedAt ? "stopped" : task.readyAt ? "duration_elapsed" : "preparation_failed";
+      if (!task.readyAt && !task.stopRequestedAt) task.outcome ??= "preparation_failed";
+    } else task.outcome ??= task.stopRequestedAt ? "cancelled" : jobs.find((job) => job.id === "work" && jobDone(job))?.phase ||
       (state.phase === "prepare_failed" || jobs.some((job) => jobDone(job) && job.phase !== "succeeded") ? "preparation_failed" : "deadline_exceeded");
     task.exports ??= [];
   });
@@ -313,7 +328,7 @@ async function finish(name, jobs) {
   state = await update(name, (task) => {
     for (const item of task.exports) if (item.phase === "collecting") Object.assign(item, { phase: "partial", error: "Collection interrupted; partial file retained." });
   });
-  const files = [...new Set([...state.recipe.artifacts, ...state.task.artifacts,
+  const files = state.task.kind === "rental" ? [...new Set(state.task.artifacts)] : [...new Set([...state.recipe.artifacts, ...state.task.artifacts,
     ...jobs.flatMap((job) => [job.log, `/workspace/.fission/jobs/${job.id}/status.json`]),
     ...(state.task.mode === "build" ? ["/workspace/build.json"] : []),
     ...(state.task.mode === "synced" ? state.task.chain === "base"
@@ -321,7 +336,7 @@ async function finish(name, jobs) {
       : ["/workspace/ethereum-data/snapshot.json", "/workspace/ethereum-data/current.json"] : [])])];
   const destination = join(directory(name), "evidence");
   let collectionReady = true;
-  try { await mkdir(destination, { recursive: true, mode: 0o700 }); }
+  try { if (files.length) await mkdir(destination, { recursive: true, mode: 0o700 }); }
   catch (error) {
     collectionReady = false;
     state = await update(name, (task) => {
@@ -350,7 +365,7 @@ async function finish(name, jobs) {
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), { phase: "partial", error: error.message }); });
     }
   }
-  if (state.task.mode === "build" && state.task.cache && !state.task.cache.save) {
+  if (state.task.kind !== "rental" && state.task.mode === "build" && state.task.cache && !state.task.cache.save) {
     const eligible = state.task.outcome === "succeeded" && !state.task.inputs.some((input) => input.remote === "/workspace/source.patch") && Date.now() < transfer.deadline;
     state = await update(name, (task) => { task.cache.save = { phase: eligible ? "attempted" : "skipped", reason: eligible ? "Save once after evidence, within cleanup cutoff" : "Requires successful clean build and remaining collection time" }; });
     if (eligible) {
@@ -385,8 +400,10 @@ export async function supervise(name) {
             await update(name, (task) => { task.lastError = error.message; });
             // Cannot destroy without an ID. Preserve evidence and explicitly require
             // resume after reconciliation; never buy a replacement automatically.
-            const result = await report(name, null, { output: state.task.output });
-            await update(name, (task) => { task.report = result; });
+            if (state.task.kind !== "rental") {
+              const result = await report(name, null, { output: state.task.output });
+              await update(name, (task) => { task.report = result; });
+            }
             return;
           }
         } else if (step === "confirm") {
@@ -395,9 +412,9 @@ export async function supervise(name) {
           if (!terminal(state)) {
             // One follow-up observation did not confirm destruction. Return
             // evidence and stop polling; explicit resume observes this same ID.
-            const result = await report(name, null, { output: state.task.output });
+            const result = state.task.kind === "rental" ? null : await report(name, null, { output: state.task.output });
             await update(name, (task) => {
-              task.report = result;
+              if (result) task.report = result;
               task.lastError = "Cleanup remains unconfirmed. Use status NAME --resume to observe the recorded deletion; do not repurchase or repeat DELETE.";
               task.observedAt = new Date().toISOString();
             });
@@ -409,6 +426,43 @@ export async function supervise(name) {
             delete task.report;
             if (task.lastError?.startsWith("Cleanup remains unconfirmed.")) delete task.lastError;
           });
+        } else if (step === "finalize") {
+          await update(name, (task, state) => {
+            task.outcome ??= ["not_submitted", "not_purchased"].includes(state.phase) ? "not_purchased" : task.readyAt || task.stopRequestedAt ? "closed" : "preparation_failed";
+            task.closeReason ??= task.readyAt ? "provider_terminated" : task.outcome;
+            task.completedAt = new Date().toISOString();
+          });
+        } else if (step === "readiness") {
+          const deadline = Math.min(Math.min(state.task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - state.task.timing.cleanupSeconds * 1000,
+            Date.parse(state.requestedAt) + (state.task.timing.provisioningSeconds + state.task.timing.preparationSeconds) * 1000);
+          const observation = await check(name, state.task.scope, 120, state.task.readiness || state.task.maxHeadAge,
+            { deadline, checks: state.task.checks });
+          await update(name, (task, current) => {
+            task.readinessResult = observation;
+            if (!observation.ready) {
+              task.outcome = "preparation_failed";
+              task.lastError = "Rental environment readiness checks failed.";
+            } else if (current.remoteId === state.remoteId && current.phase === "ready" && !current.resizePending &&
+                !task.stopRequestedAt && Date.now() < deadline) {
+              task.readyAt ??= new Date().toISOString();
+              delete task.accessError;
+              if (task.lastError?.startsWith("readiness:")) delete task.lastError;
+            }
+          });
+        } else if (step === "ready") {
+          try {
+            await refresh(name, { deadline: Math.min(state.task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - state.task.timing.cleanupSeconds * 1000 });
+            await update(name, (task) => {
+              delete task.accessError;
+              if (task.lastError?.startsWith("Rental status:")) delete task.lastError;
+            });
+          } catch (error) {
+            if (error instanceof OperationLocked) throw error;
+            await update(name, (task) => {
+              task.accessError = error.message;
+              task.lastError = `Rental status: ${error.message}`;
+            });
+          }
         } else if (step === "prepare") {
           await prepare(name);
           await update(name, (task) => { if (task.lastError?.startsWith("prepare:")) delete task.lastError; });

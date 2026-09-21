@@ -1,11 +1,11 @@
 # Fission for agents
 
-Fission turns an authorized budget, duration, source/input, workload argv, and completion condition into one managed Linux run. Use Foundry, Reth, Tempo or Linux shortcuts where they fit; otherwise describe the environment in a managed task file (see docs/harnesses.md#task-files). Built-ins are defaults, not an allowlist. The local agent chooses and interprets the experiment. Fission owns quote selection, provisioning, preparation/readiness, durable execution, evidence, and cleanup; it never embeds an LLM on the VM.
+Fission turns a budget and lifetime into a managed Linux rental, or adds a workload and completion condition for an automated run. Use `rent` for access and `run` for work; infer the environment from the user's intent. Use Foundry, Reth, Tempo or Linux shortcuts where they fit; otherwise describe the environment in a managed task file (see docs/harnesses.md#task-files). Built-ins are defaults, not an allowlist. The local agent chooses and interprets the experiment. Fission owns quote selection, provisioning, preparation/readiness, durable execution, evidence, and cleanup; it never embeds an LLM on the VM.
 
 ## Normal workflow
 
-1. Read `fission help run`, `fission budget`, and the relevant section of [docs/harnesses.md](docs/harnesses.md). Read [docs/reth.md](docs/reth.md) before synced Ethereum and [docs/rental.md](docs/rental.md) for authorization or recovery questions.
-2. Preview `fission run NAME --harness ... --budget ... --duration TOTAL --work-duration WORK --region ... -- ARGV`. Preview pays nothing. Inspect quote, resources, timing evidence, uncertainty, provider warning, and retained authorization.
+1. Read `fission help rent` or `fission help run`, `fission budget`, and the relevant section of [docs/harnesses.md](docs/harnesses.md). Read [docs/reth.md](docs/reth.md) before synced Ethereum and [docs/rental.md](docs/rental.md) for authorization or recovery questions.
+2. Preview `rent NAME` for access or `run NAME` with workload argv, using the scoped help for budget, lifetime and setup options. Preview pays nothing. Inspect quote, resources, timing evidence, uncertainty, provider warning, and retained authorization.
 3. Repeat the identical command with `--approve` only inside existing authorization. Do not treat balance, provider credit, or a failed/closed run as permission.
 4. Observe with `fission status NAME [--wait DURATION]`. After local sleep/reboot, use `--resume`; this resumes the same recorded work and never purchases or submits it again.
 5. Use `fission stop NAME` for early cancellation, then status until cleanup is confirmed. Unknown is never confirmed destruction.
@@ -14,7 +14,7 @@ Use `--repo` with a public GitHub URL and `--ref` with a full 40-character SHA f
 
 Read `help run HARNESS` for scoped options and `help index WORDS` for revision-pinned guidance. Verify differing revisions against source/help. Source previews inspect local, mounted, or explicitly selected VPS-backed caches before quotes; exact-identity release-binary reuse is not Cargo test/incremental caching. A cache VPS is a separate retained advanced workspace with its own lease/budget and explicit destruction, never a managed workload or automatic replacement. Inspect artifact collection separately from test success. For explicitly approved multi-machine work, `run NAME --from FILE --budget TOTAL` uses ordinary per-role tasks and a summed budget; purchases are sequential, with no automatic replacements. Multi-day durations still require explicit authorization.
 
-All manual lifecycle, jobs, transfers, reports, storage, cache, dataset, SSH, and discovery commands are secondary: `fission advanced COMMAND`. Never mutate a managed task through advanced commands while its supervisor is alive.
+Use normal `fission ssh NAME` for access. Manual lifecycle, jobs, transfers, reports, storage, cache, dataset, and discovery commands are secondary: `fission advanced COMMAND`. Never mutate a managed task through advanced commands while its supervisor is alive.
 
 The dashboard groups by outcome: Succeeded, Active, Unsuccessful, Unresolved, then collapsed Closed history under all records. Experiments stay together; active members keep the group active, otherwise its least-successful member determines the group. Succeeded requires confirmed cleanup; Unresolved is never proof of destruction. `[advanced]` marks unfinished legacy workspaces without a task supervisor, not a second class of supported managed runs. Use `status` and reports for authoritative outcome, costs and cleanup rather than inferring them from list position or dim styling.
 

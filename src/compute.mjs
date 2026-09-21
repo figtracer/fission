@@ -125,6 +125,15 @@ async function ensureHostKeyAlias(state) {
   } finally { await file.close(); }
 }
 
+export function sshReady(state) {
+  if (state.provider !== "compute-mpp" || state.phase !== "ready" || !state.remoteId || state.resizePending) return false;
+  const task = state.task;
+  return task?.kind !== "rental" || Boolean(task.readyAt && !task.stopRequestedAt && !task.outcome && !task.accessError &&
+    Date.now() < Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - task.timing.cleanupSeconds * 1000);
+}
+
+const quote = (arg) => "'" + arg.replaceAll("'", "'\"'\"'") + "'";
+
 export async function connect(name, options = {}) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("SSH requires an interactive terminal.");
   const { active } = await import("./workspace.mjs");
@@ -137,6 +146,7 @@ export async function connect(name, options = {}) {
   try {
     const state = await active(name);
     if (state.provider !== "compute-mpp") throw new Error("This provider has no SSH access. Use run/exec for its sandbox.");
+    if (!sshReady(state)) throw new Error("SSH access is not ready or its usable lifetime has ended. Check fission status.");
     // Bootstrap already verified this host. Interactive SSH must not contend
     // with running jobs for the local mutation lock or wait on provider HTTP.
     if (!Number.isFinite(Date.parse(state.providerExpiresAt)) || Date.parse(state.providerExpiresAt) <= Date.now())
@@ -146,7 +156,7 @@ export async function connect(name, options = {}) {
     return await new Promise((resolve, reject) => {
       // Bound dead interactive connections to two missed 15-second probes so
       // their tmux windows close even when the provider drops packets silently.
-      const child = spawn("ssh", [...sshArguments(state), "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-tt", `root@${state.sshHost}`], { stdio: "inherit" });
+      const child = spawn("ssh", [...sshArguments(state), "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-tt", `root@${state.sshHost}`, ...(state.task?.kind === "rental" ? [`cd ${quote(state.task.cwd || "/workspace")} && export PATH="/workspace:$PATH" && exec "\${SHELL:-/bin/sh}" -i`] : [])], { stdio: "inherit" });
       let failure, timer;
       const stop = () => {
         child.kill("SIGTERM");
@@ -175,7 +185,6 @@ async function ssh(state, command, options = {}) {
     error.notDispatched = true;
     throw error;
   }
-  const quote = (arg) => "'" + arg.replaceAll("'", "'\"'\"'") + "'";
   const result = await runProcess("ssh", [...sshArguments(state), `root@${state.sshHost}`,
     command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   if (result.code === null || result.code === 255) {

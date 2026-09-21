@@ -291,7 +291,7 @@ fn outcome(machine: &Machine) -> Outcome {
         Outcome::Unresolved
     } else if !machine.finished {
         Outcome::Active
-    } else if !machine.managed {
+    } else if !machine.managed || machine.phase == "closed" {
         Outcome::Closed
     } else if machine.phase == "succeeded" {
         Outcome::Succeeded

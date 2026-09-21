@@ -6,12 +6,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { root, list, load, fileLocked } from "./state.mjs";
 import { storageRoot } from "./storage.mjs";
+import { sshReady } from "./compute.mjs";
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const session = `fission-${createHash("sha256").update(root).digest("hex").slice(0, 12)}`;
 const tmux = async (...args) => (await execute("tmux", args)).stdout.trim();
-const ready = state => state.provider === "compute-mpp" && state.phase === "ready" && state.remoteId && !state.resizePending;
 
 async function ownsSession() {
   const target = session;
@@ -34,7 +34,7 @@ async function ownsSession() {
 async function window(name, select = false) {
   return fileLocked(join(root, ".tmux-window.lock"), async () => {
     const state = await load(name);
-    if (!ready(state)) throw new Error("SSH opens when the full VM is ready.");
+    if (!sshReady(state)) throw new Error("SSH opens when the full VM is ready.");
     const windows = await tmux("list-windows", "-t", session, "-F", "#{window_id} #{@fission-machine}");
     let id = windows.split("\n").map(line => line.split(" ")).find(([, machine]) => machine === name)?.[0];
     if (!id) {
@@ -49,13 +49,13 @@ async function window(name, select = false) {
 }
 
 export async function selectMachine(name) {
-  if (process.env.FISSION_TMUX_SESSION !== session) throw new Error("Start fission tmux to use managed SSH windows.");
+  if (process.env.FISSION_TMUX_SESSION !== session) throw new Error("Start fission advanced tmux to use managed SSH windows.");
   await window(name, true);
 }
 
 export async function popupMachine(name) {
   const state = await load(name);
-  if (!ready(state)) throw new Error("SSH opens when the full VM is ready.");
+  if (!sshReady(state)) throw new Error("SSH opens when the full VM is ready.");
   if (process.env.FISSION_TMUX_SESSION !== session || !process.env.TMUX_PANE)
     throw new Error("Open the popup from this Fission tmux dashboard.");
   if (!await ownsSession())
@@ -79,8 +79,8 @@ export async function popupMachine(name) {
 }
 
 export async function openTmux() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Open fission tmux in an interactive terminal.");
-  try { await tmux("-V"); } catch { throw new Error("Install tmux, then run fission tmux."); }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Open fission advanced tmux in an interactive terminal.");
+  try { await tmux("-V"); } catch { throw new Error("Install tmux, then run fission advanced tmux."); }
   let exists = false;
   try { await tmux("has-session", "-t", `=${session}`); exists = true; } catch { /* First launch. */ }
   if (exists) {
@@ -116,7 +116,7 @@ async function serve() {
           if (name && states.some(state => state.name === name && ["terminated", "expired", "not_submitted"].includes(state.phase)))
             await tmux("kill-window", "-t", id);
         }
-        for (const state of states.filter(ready)) {
+        for (const state of states.filter(sshReady)) {
           if (seen.has(state.name)) continue;
           seen.add(state.name); // A disconnected shell is reopened explicitly, never in a retry loop.
           await window(state.name);

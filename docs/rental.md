@@ -1,6 +1,6 @@
 # Rental safety, accounting, and recovery
 
-The normal rental is one managed `fission run`; do not assemble plan/open/prepare/check/job/report/close manually. Preview without `--approve`, inspect the returned quote/resources/timing/provider warning, then repeat unchanged with approval only inside the user's retained budget and duration.
+Use managed `fission rent` for a machine you will use yourself, or `fission run` for an automated workflow; do not assemble plan/open/prepare/check/job/report/close manually. Preview without `--approve`, inspect the returned quote/resources/timing/provider warning, then repeat unchanged with approval only inside the user's retained budget and duration.
 
 ## Authorization and accounting
 

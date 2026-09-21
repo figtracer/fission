@@ -43,20 +43,20 @@ print(json.dumps({'ready':all(checks.values()),'checks':checks,'snapshotBlock':s
   return checks;
 }
 
-export async function check(name, scope, seconds, maxHeadAge) {
+export async function check(name, scope, seconds, maxHeadAge, options = {}) {
   // Keep the guest deadline below SSH’s three-minute transport bound.
   if (seconds > 120) throw new Error("Readiness observations allow at most 2m; use a bounded job for preparation or waiting.");
   return locked(name, async () => {
     const state = await active(name);
-    const checks = probes(state.recipe, scope, maxHeadAge);
-    const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000);
+    const checks = [...probes(state.recipe, scope, maxHeadAge), ...(options.checks || [])];
+    const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000, (options.deadline ?? Infinity) / 1000);
     if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("No remaining lease time for readiness.");
     const runner = await readFile(new URL("../harness/readiness.py", import.meta.url), "utf8");
     const id = randomUUID(), path = join(directory(name), "checks", `${id}.json`);
     const record = { id, name, scope, phase: "observation_unknown", recipeSha256: state.recipe.digest,
       runnerSha256: createHash("sha256").update(runner).digest("hex"), requestedAt: new Date().toISOString(), checks, deadline };
     await writeJSON(path, record);
-    const result = await execute(state, ["python3", "-c", runner, JSON.stringify({ scope, checks, deadline })], operationCap);
+    const result = await execute(state, ["python3", "-c", runner, JSON.stringify({ scope, checks, deadline })], operationCap, undefined, { deadline: deadline * 1000 });
     const observation = JSON.parse(result.stdout);
     if ((result.returncode === 0) !== (observation.ready === true) || observation.schemaVersion !== 1 || observation.scope !== scope || !Array.isArray(observation.checks) || typeof observation.ready !== "boolean")
       throw new Error("Invalid readiness response. Observation remains unresolved.");

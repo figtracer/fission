@@ -120,6 +120,11 @@ bundled recipe. Preparation, checks and artifacts append to the inherited arrays
 scalar fields override them. Custom tasks retain explicit resources, preparation,
 scope and workload. There is still only one supervisor and cleanup path.
 
+For interactive use, `fission rent` uses the same setup and readiness without a
+workload. Foundry defaults to tools, Reth to its executable, and Tempo to a local
+development node. Choose source or synced setup when that is what the user needs.
+Read `fission help rent` for access and lifetime semantics.
+
 ## Foundry
 
 Modes: `tools` for pinned Forge/Cast contract work; `test` for testing changed Foundry crates; `build` when release binaries are needed. **Foundry-only option:** `--solver z3` adds the pinned solver to tools mode. It is absent from generic run help and rejected for other harnesses. A symbolic `pass` is bounded by reported assumptions/model; accept a violation only with replay-confirmed counterexample; timeout, unsupported behavior, all-revert paths, solver errors, and zero meaningful exploration are incomplete.
@@ -174,7 +179,7 @@ Submodule worktrees must stay clean: provenance records their commits, not uncom
 
 ## Reth
 
-Modes: `dev` for the isolated pinned Ethereum development chain, `test` for selected source tests/benchmarks without a node build, `build` for release-profile binaries, and `synced` for a managed mainnet node. Omitted `--chain` means `ethereum` and preserves all four modes. `--chain base` supports `test`, `build`, and `synced`; Base `dev` and Reth-BSC are unavailable.
+Modes: `tools` for the pinned Reth executable, `dev` for the isolated pinned Ethereum development chain, `test` for selected source tests/benchmarks without a node build, `build` for release-profile binaries, and `synced` for a managed mainnet node. Omitted `--chain` means `ethereum` and supports these modes. `--chain base` supports `test`, `build`, and `synced`; Base `dev` and Reth-BSC are unavailable.
 
 Base source mode uses a pinned public checkout such as the authoritative `https://github.com/base/base` repository. Public forks are accepted when explicitly pinned. It installs the shared Rust 1.96.1 source environment and Base's native dependencies. Build mode runs locked Cargo release compilation for the `base-reth-node` binary; this is Fission's ordinary `release` profile, not Base's published max-performance profile. The inherited 8 vCPU, 32 GiB RAM and 200 GiB disk floors are planning defaults, not measured Base requirements; current short public-alpha runs require `--no-resize` at that size.
 

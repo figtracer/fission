@@ -66,11 +66,38 @@ disk, and healthy initialization. The gateway exposes no provider upgrade-job ID
 an accepted resize remains unfinished until guest verification succeeds.
 
 Example (amount/duration must be authorized):
-  fission run contract-check --harness foundry --budget 0.50 --duration 2h \\
+  fission run my-task --harness foundry --budget 0.50 --duration 2h \\
     --work-duration 10m --region ams --input checks.py --approve -- python3 checks.py
 
 All data is JSON. --help before -- is local; flags after -- belong to the workload.
 Use status NAME --wait 10m to observe; stop NAME requests early cleanup.`;
+
+const rent = `Rent a managed Linux machine and hand over SSH access; preview without --approve.
+
+Usage: fission rent NAME --budget AMOUNT --duration TOTAL --region REGION
+       [--harness linux|foundry|reth|tempo] [OPTIONS] [--approve]
+       fission rent NAME --from task.json --budget AMOUNT [--approve]
+
+Linux is the default. Foundry installs contract tools; Reth defaults to its
+executable only; Tempo defaults to an isolated development node. Select a mode
+for source preparation, builds or synced nodes. Read the ecosystem's help for
+its environment choices. Ordinary repositories can supply a task-file recipe.
+The task file accepts the same setup fields as run, with no command/work-duration.
+
+Preview, approve within the user's budget, then status NAME --wait DURATION.
+When ready, use fission ssh NAME. Inside the Fission tmux dashboard, --tmux
+selects its window (start the dashboard with fission advanced tmux). The owner keeps the
+rental until stop NAME or the cleanup cutoff. Disconnecting SSH does not stop it.
+No workload, dummy sleep command or experiment report is required.
+
+TOTAL starts at purchase and includes provisioning, preparation and cleanup;
+it is not guaranteed hands-on time. Preview retains those allowances. Status
+shows usableUntil and readiness; do not count preparation as interactive access.
+Request enough total time when the user needs a particular working interval.
+
+Resource, input, source, node, cache and preparation options match help run.
+--work-duration and workload argv apply to run only. Status retains spending,
+readiness and cleanup even when no report or output artifacts were requested.`;
 
 const status = `Observe tasks or resume the same recorded task.
 
@@ -81,7 +108,8 @@ Default reads saved task/job results, cost uncertainties, report and cleanup.
 --resume starts a detached owner if absent; it never purchases or resubmits jobs.
 Only locks whose recorded PID has exited can be recovered. Unknown owners remain.
 --refresh observes the provider; --wait observes saved progress (no paid polling).
-Waiting exits 0 for success, 1 for a finished failure, 2 for an unfinished task.
+For rentals, waiting stops when access is ready or cleanup finishes.
+Waiting exits 0 for success/ready/closed, 1 for a finished failure, 2 if unfinished.
 Ctrl-C stops waiting, not the task. Use stop for cancellation.
 Host sleep pauses coordination; guest job deadlines and prepaid lease still bound
 work. Bootstrap also arms guest poweroff at the full task deadline. Poweroff does
@@ -132,9 +160,11 @@ const advanced = {
 
 export async function help(parts = []) {
   const key = parts.join(" ");
-  if (!key || key === "help") return `fission — a task, a suitable Linux machine, a bounded result
+  if (!key || key === "help") return `fission — rent machines and run tasks with your coding agent
 
 Usage: fission                     Open the Rust task dashboard
+       fission rent NAME ...      Prepare a machine for your own use
+       fission ssh NAME           Connect to a ready machine
        fission run NAME ... -- CMD Plan and execute one managed task
        fission status [NAME]       Progress, outcome, cost, evidence, cleanup
        fission stop NAME           Cancel work and request confirmed cleanup
@@ -143,18 +173,20 @@ Usage: fission                     Open the Rust task dashboard
        fission help COMMAND        Focused syntax; COMMAND --help also works
 
 Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
-Read help run first. No embedded agent runs in the VM.
+Use rent for access or run for a workflow. No embedded agent runs in the VM.
 MPP/Tempo purchase path. See help rental.
 --approve uses existing budget and duration authorization.
 Durations: s/m/h/d, at least 60s; provider availability and authorization bound leases.
 Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
+  if (key === "rent") return `fission rent — ${rent}`;
+  if (key === "ssh") return "fission ssh — Connect to a ready machine.\n\nUsage: fission ssh NAME [--tmux]\n\nRequires an interactive terminal. Disconnecting leaves its managed lifetime intact.\nUse fission stop NAME when finished.";
   if (key === "run") return `fission run — ${run}`;
   if (key === "campaign") return `fission campaign — Expand a deterministic seeded campaign locally; this never reads the ledger, quotes, or purchases.\n\nUsage: fission campaign expand CAMPAIGN.json --output MANIFEST.json\n\nThe campaign declaration has schemaVersion 1, kind "campaign", workers, baseSeed,\nseedStride, budget, and a single worker template. Fission expands worker-0 through\nworker-N with seed = baseSeed + index × seedStride, replacing only whole argv\nelements {{seed}}, {{workerIndex}}, and {{workerCount}}. The template must include\n{{seed}}. The output is an ordinary schemaVersion 1 multi-machine manifest; inspect\nit, then use fission run NAME --from MANIFEST.json --budget CAMPAIGN_BUDGET.\n\nExpansion validates every worker locally, resolves template local paths relative to\nthe campaign file, refuses to overwrite output, and does not coordinate a shared\nfuzz corpus or authorize a purchase. Existing manifests remain unchanged.`;
   if (parts[0] === "index") return JSON.stringify(await guidance(parts.slice(1).join(" ")), null, 2);
-  if (parts[0] === "run" && parts.length === 2 && Object.hasOwn(harnesses, parts[1]))
-    return `${await help(["run"])}\n\n${await help([parts[1]])}`;
+  if (["run", "rent"].includes(parts[0]) && parts.length === 2 && Object.hasOwn(harnesses, parts[1]))
+    return `${await help([parts[0]])}\n\n${await help([parts[1]])}`;
   if (key === "status") return `fission status — ${status}`;
   if (key === "budget") return `fission budget — ${budget}`;
   if (key === "stop") return "fission stop — Cancel the managed task and collect available evidence before teardown.\n\nUsage: fission stop NAME\n\nReturns recorded cancellation intent; use status NAME --wait DURATION to confirm\ncleanup. Repeating stop observes the same task, not a second purchase or DELETE.";

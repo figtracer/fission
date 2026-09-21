@@ -1,34 +1,30 @@
 # Fission
 
-Temporary Linux compute for your coding agent, paid through MPP.
+Rent machines and run tasks with your coding agent.
 
-Ask your agent: **“Test this change on Linux within this budget.”** It prepares a
-task, finds a suitable machine, checks readiness, runs the work, and returns a
-local report with results, spending and cleanup status.
+Ask for a machine, or give your agent a workflow and a budget. Fission handles
+quotes, setup, execution and cleanup, with built-in Foundry, Reth and Tempo
+environments. Use SSH yourself or run tasks across multiple machines. Payments
+use MPP on Tempo.
 
-Foundry, Reth and Tempo provide built-in setup. Task files can describe other
-software, node configurations, inputs and readiness checks using the same lifecycle.
-
-```sh
-fission       # Open the Rust dashboard
-fission help  # Explore commands
-```
-
-The task includes its own budget, resource requirements, preparation allowance and
-work deadline. Approval is bounded by the retained spending authorization. Reports
-include measured timing and any unresolved cost or cleanup information.
-
-Install from a reviewed checkout with Node.js 22.13+, Rust and SSH:
+Requires Node.js 22.13+, Rust and SSH. Clone with an account that has repository access:
 
 ```sh
-npm install
+git clone https://github.com/figtracer/fission.git
+cd fission
 npm run setup
+fission
 ```
 
-- [Agent skill](skills/fission/SKILL.md)
-- [Task files and harnesses](docs/harnesses.md#task-files)
-- [Synced nodes](docs/reth.md)
-- [Budgets and recovery](docs/rental.md)
-- [Installation](docs/install.md)
+Setup installs the CLI, Rust dashboard and agent skill. Configure your
+[Tempo wallet](https://docs.tempo.xyz/cli) before buying a machine.
 
-Fission is an independent, early-stage project. Releases are currently paused.
+Tell your agent: **“Get me a Linux machine within this budget”** or
+**“Run this workflow on Linux and bring back the results.”** Every rental has a
+budget and deadline; automated workflows also return local results and spending.
+
+Use `fission help` to explore commands.
+
+[Installation](docs/install.md) · [Agent skill](skills/fission/SKILL.md) ·
+[Environments](docs/harnesses.md) · [Synced nodes](docs/reth.md) ·
+[Budgets and recovery](docs/rental.md)

@@ -1,17 +1,25 @@
 # Installation
 
-Releases are paused. Install and run from a reviewed local source checkout; do not use an old prerelease archive as the current managed interface.
-
-Requirements: Node.js 22.13 or newer, Rust toolchain for the native TUI build, SSH, Linux x86_64 guests, and a configured Tempo CLI wallet for approved MPP payments.
+Install from the current source checkout. You need Node.js 22.13+, Rust, SSH and
+repository access.
 
 ```sh
-git clone PRIVATE_REPOSITORY_URL fission
+git clone https://github.com/figtracer/fission.git
 cd fission
-npm install
 npm run setup
-fission help
+fission
 ```
 
-Use the repository's current package scripts as authoritative and review the checkout/revision before installation. Setup builds and links the local checkout, then installs the bundled skill through the advanced interface. To install only the skill after inspecting `skills/fission/SKILL.md`, use `fission advanced skill install`.
+`npm run setup` builds the Rust dashboard, links `fission` globally and installs
+the agent skill. The global command uses this checkout. Use `fission help` for
+commands, or ask your agent to get a machine or run a workflow within a budget.
 
-Do not publish, tag, bump the package version, or create a release while the pause remains in effect. Existing prereleases and checksums are historical only.
+Before purchasing, configure the Tempo CLI wallet for MPP payments. Machine
+previews show the quote, resources and lifetime before approval.
+
+For an existing checkout, pull the latest changes and rerun `npm run setup`.
+If the skill installer reports an existing different skill, compare it with
+`skills/fission/SKILL.md` before replacing your local copy.
+
+Current installation uses source; historical prerelease archives contain an older
+interface. Release publication remains paused.

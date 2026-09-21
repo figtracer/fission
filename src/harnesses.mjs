@@ -9,17 +9,20 @@ import { fingerprint } from "./experiments.mjs";
 export const taskOptions = ["harness", "mode", "chain", "solver", "budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "patch", "cwd", "input", "artifact", "output", "cache-workspace", "cache-max-bytes", "snapshot", "manifest", "manifest-url", "snapshot-plan", "checkpoint-url", "checkpoint", "l1-execution-url", "l1-beacon-url", "max-head-age", "max-safe-age", "max-l1-head-age", "max-l1-lag-blocks", "max-tip-lag-blocks", "extra-disk-gib"];
 
 // Task files also accept an explicit guest recipe, using the same managed runtime.
-export const taskFileOptions = [...taskOptions, "recipe", "preparation", "scope", "context", "node"];
+export const taskFileOptions = [...taskOptions, "recipe", "preparation", "scope", "context", "node", "kind"];
 
 // One selection contract; recipes remain the pinned preparation source of truth.
 export const harnesses = {
   foundry: { modes: ["tools", "test", "build"], description: "Contract tests, fuzz/invariants, symbolic properties, or test/build Foundry itself." },
-  reth: { modes: ["dev", "test", "build", "synced"], description: "Ethereum/Base source work and configurable snapshot-backed nodes." },
+  reth: { modes: ["dev", "tools", "test", "build", "synced"], description: "Ethereum/Base source work and configurable snapshot-backed nodes." },
   tempo: { modes: ["dev", "tools", "test", "build", "node"], description: "Tempo development/public nodes, Foundry contract model, or client tests/build." },
   linux: { modes: ["tools"], description: "Plain Linux x86 shell/Python fallback." },
 };
 
 export async function taskSpec(options, command) {
+  if (options.kind !== undefined && !["run", "rental"].includes(options.kind)) throw new Error("Task kind must be run or rental.");
+  const rental = options.kind === "rental";
+  if (rental && options["work-duration"] !== undefined) throw new Error("Rentals use --duration for their full lifetime; work-duration applies to run.");
   const custom = options.recipe !== undefined;
   let definition;
   if (custom) {
@@ -44,18 +47,20 @@ export async function taskSpec(options, command) {
   } else if (["scope", "context"].some((key) => options[key] !== undefined)) {
     throw new Error("Custom scope and context require an explicit recipe.");
   }
-  const harness = custom ? definition.name : options.harness;
+  const harness = custom ? definition.name : options.harness || (rental ? "linux" : undefined);
   if (!custom && !Object.hasOwn(harnesses, harness || "")) throw new Error("Choose --harness foundry, reth, tempo, or linux.");
-  const mode = custom ? "custom" : options.mode || harnesses[harness].modes[0];
+  const mode = custom ? "custom" : options.mode || (rental && harness === "reth" ? "tools" : harnesses[harness].modes[0]);
   if (!custom && !harnesses[harness].modes.includes(mode)) throw new Error(`Modes for ${harness}: ${harnesses[harness].modes.join(", ")}.`);
   const source = ["test", "build"].includes(mode);
   if (options.chain !== undefined && harness !== "reth" && !(harness === "tempo" && mode === "node")) throw new Error("--chain applies to Reth or Tempo node mode.");
   const chain = !custom && harness === "reth" ? options.chain || "ethereum" : undefined;
   if (!custom && harness === "reth" && !["ethereum", "base"].includes(chain))
     throw new Error("Bundled Reth supports --chain ethereum or --chain base. Reth-BSC is unavailable as a bundled shortcut; use an explicit task recipe.");
-  if (chain === "base" && mode === "dev")
+  if (chain === "base" && ["dev", "tools"].includes(mode))
     throw new Error("Base-Reth does not support standalone dev mode; use source test/build or managed synced mode. Standalone dev does not provide Base rollup consensus or L1 infrastructure.");
-  if (!Array.isArray(command) || !command.length || typeof command[0] !== "string" || !command[0] || command.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("Supply the workload argv after --.");
+  if (rental) {
+    if (!Array.isArray(command) || command.length) throw new Error("Rentals hand over access; use run to execute a workload.");
+  } else if (!Array.isArray(command) || !command.length || typeof command[0] !== "string" || !command[0] || command.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("Supply the workload argv after --.");
   if (options.solver && (harness !== "foundry" || mode !== "tools" || options.solver !== "z3")) throw new Error("--solver z3 applies to Foundry tools.");
   if (options.patch && !source) throw new Error("--patch applies to pinned client test/build modes; use --input for other workload files.");
   if (options["cache-workspace"] && (mode !== "build" || options.patch))
@@ -107,14 +112,14 @@ export async function taskSpec(options, command) {
   const snapshot = mode === "synced" ? options.snapshot || "full" : undefined;
   if (snapshot && !["minimal", "full", "archive"].includes(snapshot)) throw new Error("Snapshot selection must be minimal, full or archive.");
   if (snapshot && snapshot !== "full" && !options["prepare-duration"]) throw new Error("Choose an explicit prepare-duration for the selected snapshot; full-node timings do not establish its import duration.");
-  const total = duration(options.duration), work = duration(options["work-duration"]);
+  const total = duration(options.duration), work = rental ? 0 : duration(options["work-duration"]);
   // Policy allowances, not measured maxima. Leave transfer variance and bounded
   // SSH/export/DELETE time; never silently purchase a longer authorization.
   const timing = {
     provisioningSeconds: 1800, preparationSeconds: custom ? duration(options["prepare-duration"]) : mode === "synced" ? 14400 : source ? 3600 : 600,
     workSeconds: work, cleanupSeconds: 900, authorizedSeconds: total,
     basis: "30m provisioning allows the observed 13m migration plus guest checks; 15m cleanup allows bounded transfers and confirmation. Planning allowances are not guarantees.",
-    evidence: tempoNode || options.node ? { sampleCount: 0, uncertainty: "Configured client/environment; choose time and resources for this setup. Default-client timings do not qualify this configuration." } : snapshot && snapshot !== "full" ? { sampleCount: 0, selection: snapshot, uncertainty: "No measured import/catch-up bound for this selection. Size from its canonical plan and choose a preparation allowance." } : custom ? { sampleCount: 0, uncertainty: "Operator-supplied preparation allowance for this recipe; no measured startup bound. Setup and readiness must finish within the authorized preparation window." } : mode === "synced" && chain === "base" ? {
+    evidence: tempoNode || options.node || options.preparation?.length || harness === "linux" || harness === "reth" && ["dev", "tools"].includes(mode) ? { sampleCount: 0, uncertainty: "No measured preparation time for this environment. Choose time and resources for its setup; measurements from other environments do not establish its duration." } : snapshot && snapshot !== "full" ? { sampleCount: 0, selection: snapshot, uncertainty: "No measured import/catch-up bound for this selection. Size from its canonical plan and choose a preparation allowance." } : custom ? { sampleCount: 0, uncertainty: "Operator-supplied preparation allowance for this recipe; no measured startup bound. Setup and readiness must finish within the authorized preparation window." } : mode === "synced" && chain === "base" ? {
       date: "2026-09-17", sampleCount: 0, clients: "Base unified node 1.4.0",
       uncertainty: "Fixture/local integration only. Base snapshot download, extraction, indexing, L1 derivation and catch-up have no measured managed-run bound; choose an explicit larger preparation allowance. Live node readiness is unqualified.",
     } : mode === "synced" ? {
@@ -139,10 +144,18 @@ export async function taskSpec(options, command) {
     timing.preparationSeconds = requested;
   }
   timing.requiredSeconds = timing.provisioningSeconds + timing.preparationSeconds + work + timing.cleanupSeconds;
-  if (timing.requiredSeconds > total) throw new Error(`Duration too short: ${timing.provisioningSeconds}s provisioning + ${timing.preparationSeconds}s preparation + ${work}s workload + ${timing.cleanupSeconds}s cleanup = ${timing.requiredSeconds}s required; ${total}s authorized. No quote or purchase submitted.`);
+  if (timing.requiredSeconds > total || rental && timing.requiredSeconds === total) throw new Error(`Duration too short: ${timing.provisioningSeconds}s provisioning + ${timing.preparationSeconds}s preparation + ${work}s workload + ${timing.cleanupSeconds}s cleanup = ${timing.requiredSeconds}s required; ${total}s authorized. No quote or purchase submitted.`);
   let selected = source ? chain === "base" ? "base-reth-source" : `${harness}-source` : mode === "synced" ? chain === "base" ? "base-synced" : "reth-synced" : tempoNode ? "tempo-node" : harness === "tempo" && mode === "tools" ? "foundry" : harness;
   if (options.solver) selected = "foundry-symbolic";
   definition ||= await recipe(selected);
+  if (harness === "reth" && mode === "tools") {
+    const { digest, ...tools } = definition;
+    tools.description = "Pinned Reth executable, ready for your own commands.";
+    tools.prepare = tools.prepare.slice(0, 1);
+    tools.checks = tools.checks.filter((check) => check.scope === "tools");
+    tools.artifacts = [];
+    definition = validateRecipe(tools);
+  }
   if (options.node || tempoNode || chain === "base" && mode === "synced") {
     const {digest, ...configured} = definition;
     configured.prepare = definition.prepare.map((argv) => argv.at(-1) === "install" ? [...argv, "--options", JSON.stringify(node)] : argv);
@@ -255,7 +268,7 @@ export async function taskSpec(options, command) {
   if (artifacts.some((path) => !path.startsWith("/workspace/") || /[\0\r\n]/.test(path))) throw new Error("--artifact must name a regular /workspace/file; databases stay remote.");
   const cwd = options.cwd || (options.repo ? "/workspace/source" : "/workspace");
   if (!isAbsolute(cwd) || cwd.includes("\0")) throw new Error("--cwd must be an absolute guest directory.");
-  return { definition, disk, task: { harness, mode, ...(chain ? { chain } : {}), command, cwd, inputs, preparation, artifacts, ...(snapshot ? { snapshot } : {}), ...(options.node || tempoNode || baseReadiness ? { node, checks: additionalChecks } : {}),
+  return { definition, disk, task: { ...(rental ? { kind: "rental" } : {}), harness, mode, ...(chain ? { chain } : {}), command, cwd, inputs, preparation, artifacts, ...(snapshot ? { snapshot } : {}), ...(options.node || tempoNode || baseReadiness ? { node, checks: additionalChecks } : {}),
     scope: custom ? options.scope || "tools" : mode === "test" ? "source" : mode === "build" ? "build" : ["dev", "synced", "node"].includes(mode) ? "node" : "tools",
     maxHeadAge: tempoNode ? undefined : options["max-head-age"], ...(baseReadiness ? { readiness: baseReadiness } : snapshot ? { readiness: { maxHeadAge: Number(options["max-head-age"]), selection: snapshot } } : {}), timing, output: resolve(options.output || "fission"),
     context: tempoNode ? `Managed Tempo ${node.role} on ${node.network}; readiness records chain, sync state and any additional role checks.` : custom ? options.context || definition.description || "Custom managed Linux task." : chain === "base" && mode === "synced" ? `Managed Base ${node.network} execution and rollup consensus using credential-free L1 endpoints; fixture/local validated, live snapshot import and sync unqualified.` :

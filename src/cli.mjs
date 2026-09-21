@@ -90,14 +90,14 @@ async function main() {
     const [command] = positionals;
     const topic = command === "help" ? positionals.slice(1)
       : positionals.slice(0, ["cache", "dataset", "skill"].includes(command) ? 2 : 1);
-    if (!advanced && command === "run" && values.harness) topic.push(values.harness);
+    if (!advanced && ["run", "rent"].includes(command) && values.harness) topic.push(values.harness);
     console.log(await help(advanced ? ["advanced", ...topic] : topic)); return;
   }
   if (advanced && !positionals.length) { console.log(await help(["advanced"])); return; }
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission status --json for task data.");
-  if (!advanced && !["ui", "run", "status", "stop", "help", "budget", "campaign"].includes(command))
+  if (!advanced && !["ui", "run", "rent", "ssh", "status", "stop", "help", "budget", "campaign"].includes(command))
     throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
     skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
@@ -109,13 +109,14 @@ async function main() {
   };
   if (!advanced) {
     allowed.run = values.from ? ["from", "budget", "approve"] : [...taskOptions, "approve"];
+    allowed.rent = values.from ? ["from", "budget", "approve"] : [...taskOptions.filter((key) => key !== "work-duration"), "approve"];
     allowed.status = ["refresh", "resume", "wait"];
   }
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
   const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   arity.stop = 2; arity.supervise = 2;
-  if (!advanced) { arity.run = 2; arity.status = name ? 2 : 1; }
+  if (!advanced) { arity.run = 2; arity.rent = 2; arity.status = name ? 2 : 1; }
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission help ${command}.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
@@ -188,6 +189,13 @@ async function main() {
       break;
     }
     case "jobs": emit((await listJobs(name)).map(jobSummary)); break;
+    case "rent": {
+      const options = { ...values, kind: "rental" };
+      const result = values.from ? await runFile(name, options) : await runTask(name, options, []);
+      emit(result);
+      if (result.status === "unavailable") process.exitCode = 2;
+      break;
+    }
     case "run": {
       if (!advanced) {
         if (values.from && tail.length) throw new Error("The task file supplies workload argv; do not add a command after --.");
@@ -243,12 +251,12 @@ async function main() {
         let result;
         do {
           result = await taskStatus(name);
-          if (!values.wait || result.phase === "done") break;
+          if (!values.wait || result.phase === "done" || result.kind === "rental" && result.ready) break;
           await delay(Math.min(1000, Math.max(0, until - Date.now())));
         } while (Date.now() < until);
         emit(result);
-        if (values.wait && result.phase !== "done") process.exitCode = 2;
-        else if (values.wait && result.outcome !== "succeeded") process.exitCode = 1;
+        if (values.wait && result.phase !== "done" && !(result.kind === "rental" && result.ready)) process.exitCode = 2;
+        else if (values.wait && result.phase === "done" && !["succeeded", "closed"].includes(result.outcome)) process.exitCode = 1;
         break;
       }
       const state = values.refresh ? await refresh(name) : await load(name);
