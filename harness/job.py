@@ -12,6 +12,8 @@ import time
 root = pathlib.Path(sys.argv[1])
 spec = json.loads((root / "spec.json").read_text())
 deadline = spec["deadline"]
+# Built-in recipes stage pinned tools here; nested workload processes inherit them.
+os.environ["PATH"] = "/workspace" + os.pathsep + os.environ.get("PATH", os.defpath)
 state = {"id": spec["id"], "phase": "running", "startedAt": time.time(), "step": 0}
 
 

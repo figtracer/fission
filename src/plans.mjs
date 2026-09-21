@@ -20,11 +20,11 @@ export const providers = [{
   payment: "MPP tempo.charge",
 }, {
   id: "smol-orthogonal", available: false, gateway: "Orthogonal", operator: "Smol",
-  reason: "Lifecycle API returned expired_key on 2026-09-13. No purchase until authenticated lifecycle operations work.",
+  reason: "Sep 21, 2026: live creation succeeds, but the returned stopped machine gives machine-not-found on start, status and delete. Execution and cleanup remain unverified.",
   evidence: "https://www.orthogonal.com/blog/smolmachines-microvms-for-ai-agents",
 }, {
   id: "agentvm", available: false, gateway: "AgentVM", operator: "Hetzner",
-  reason: "Published MPP profile has unselectable capacity (up to 160 GB), Linux only, and no verified capability-authenticated immediate teardown.",
+  reason: "Sep 21, 2026: Tempo session creation, SSH, Foundry checks and expiry destruction passed. Managed support still needs recoverable renewals, early stop and session accounting; capacity is selected by the API (up to 160 GB).",
   evidence: "https://mpp.agentvm.sh/compute/sessions",
 }, {
   id: "vps-phoneagent", available: false, gateway: "Mercator / PhoneAgent", operator: "Unspecified",

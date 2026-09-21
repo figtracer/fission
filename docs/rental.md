@@ -36,6 +36,6 @@ If the follow-up deletion observation remains unconfirmed, the supervisor writes
 
 ## Provider support
 
-MPP and x402 are permitted payment protocols. The implemented VM purchase path is MPP through the configured compute gateway; machine alternatives from that gateway are not independent-provider failover. Catalog reads and dry-run quotes are bounded, preview uses one complete snapshot, and purchase revalidates against a fresh snapshot.
+VM purchases use MPP through the configured compute gateway; machine alternatives from that gateway are not independent-provider failover. Catalog reads and dry-run quotes are bounded, preview uses one complete snapshot, and purchase revalidates against a fresh snapshot.
 
 A provider is usable only when the same payment identity and ownership route support create, SSH, status, and terminate with bounded full cost and recoverable request identity. Discovery alone is not support. Never treat provider expiry, guest shutdown, or a missing response as confirmed destruction.
