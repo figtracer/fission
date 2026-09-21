@@ -1,13 +1,13 @@
 # Installation
 
-Download the [0.1.7 release](https://github.com/figtracer/fission/releases/tag/v0.1.7)
+Download the [0.1.0 release](https://github.com/figtracer/fission/releases/tag/v0.1.0)
 package and matching checksum for your machine:
 
 | Platform | Package |
 | --- | --- |
-| macOS Apple Silicon | `fission-0.1.7-darwin-arm64.tgz` |
-| macOS Intel | `fission-0.1.7-darwin-x64.tgz` |
-| Linux x86_64 | `fission-0.1.7-linux-x64.tgz` |
+| macOS Apple Silicon | `fission-0.1.0-darwin-arm64.tgz` |
+| macOS Intel | `fission-0.1.0-darwin-x64.tgz` |
+| Linux x86_64 | `fission-0.1.0-linux-x64.tgz` |
 
 Requires Node.js 22.13+ and SSH; Linux requires glibc 2.35+. The dashboard is
 prebuilt, so Rust is unnecessary. While the repo is private, downloads require

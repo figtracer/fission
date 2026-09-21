@@ -1,4 +1,4 @@
-# Fission 0.1.7
+# Fission 0.1.0
 
 Rent machines and run tasks with your coding agent.
 
@@ -12,7 +12,7 @@ Download the package for macOS Apple Silicon, macOS Intel or Linux x86_64 and it
 matching `.sha256` file. Verify the checksum, then:
 
 ```sh
-npm install -g ./fission-0.1.7-PLATFORM.tgz --ignore-scripts
+npm install -g ./fission-0.1.0-PLATFORM.tgz --ignore-scripts
 fission advanced skill install
 fission
 ```
