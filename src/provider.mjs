@@ -4,6 +4,7 @@ import { readFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
 import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { units, reserve, releaseRejectedCreate } from "./budget.mjs";
 
@@ -92,7 +93,19 @@ export async function quote(operation, body, provider = "modal-tempo") {
   provider = providerId(provider);
   const url = provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
   const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url], { timeoutMs: 60000 });
-  if (result.code !== 0) throw new Error(`Quote unavailable from ${provider}${body.plan ? ` for ${body.plan} in ${body.region}` : ""}: ${result.interruption === "observation_deadline" ? "dry-run timed out after 60000ms" : result.stderr.trim() || result.stdout.trim()}. No payment submitted.`);
+  if (result.code !== 0) {
+    let detail = "";
+    try {
+      const response = JSON.parse(result.stdout);
+      detail = [response.error, response.detail, response.details, response.message]
+        .filter((value) => typeof value === "string").join("; ");
+    } catch { /* Non-JSON bodies are not useful provider diagnostics. */ }
+    // Keep upstream explanations alongside CLI status, bounded and safe for terminals.
+    const diagnostic = stripVTControlCharacters([result.stderr.trim(), detail].filter(Boolean).join("; "))
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 2048);
+    const reason = result.interruption === "observation_deadline" ? "dry-run timed out after 60000ms" : diagnostic || `quote command exited ${result.code}`;
+    throw new Error(`Quote unavailable from ${provider}${body.plan ? ` for ${body.plan} in ${body.region}` : ""}: ${reason}. No payment submitted.`);
+  }
   let offer;
   try { offer = JSON.parse(result.stdout); } catch { throw new Error("Provider returned an unreadable quote."); }
   if (offer.payment_required !== true || offer.intent !== "charge" || offer.method !== "tempo" ||
