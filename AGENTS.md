@@ -31,7 +31,7 @@ The dashboard groups by outcome: Succeeded, Active, Unsuccessful, Unresolved, th
 
 ## Working on Fission
 
-Keep the Node backend authoritative for plans, payment, durable state, jobs, and lifecycle; the Rust TUI is a client and Python harnesses run on the guest. Keep one repository and the existing local runner (no Orbs). Version bumps, tags, publication, paid rentals and screen use require explicit authorization. The user authorized the 0.2.0 release; repository visibility remains their decision. Command contracts belong in code/help; docs provide workflow and interpretation without duplicating policy implementation.
+Keep the Node backend authoritative for plans, payment, durable state, jobs, and lifecycle; the Rust TUI is a client and Python harnesses run on the guest. Keep one repository and the existing local runner (no Orbs). Version bumps, tags, publication, paid rentals and screen use require explicit authorization. The user authorized the 0.1.7 release; repository visibility remains their decision. Command contracts belong in code/help; docs provide workflow and interpretation without duplicating policy implementation.
 
 Consult Amp's built-in Oracle whenever guidance or planning help is needed, including consequential design decisions and unresolved technical questions. Use its advice to inform the plan, then verify and own the implementation.
 

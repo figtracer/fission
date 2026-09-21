@@ -1,6 +1,6 @@
 {
   "name": "fission",
-  "version": "0.2.0",
+  "version": "0.1.7",
   "private": true,
   "description": "Rent machines and run tasks with your coding agent.",
   "type": "module",

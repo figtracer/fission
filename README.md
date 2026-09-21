@@ -7,11 +7,11 @@ quotes, setup, execution and cleanup, with built-in Foundry, Reth and Tempo
 environments. Use SSH yourself or run tasks across multiple machines. Payments
 use MPP on Tempo.
 
-Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.2.0)
+Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.1.7)
 and verify its checksum ([installation guide](docs/install.md)). Requires Node.js 22.13+ and SSH.
 
 ```sh
-npm install -g ./fission-0.2.0-PLATFORM.tgz --ignore-scripts
+npm install -g ./fission-0.1.7-PLATFORM.tgz --ignore-scripts
 fission advanced skill install
 fission
 ```
