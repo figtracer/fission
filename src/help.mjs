@@ -163,6 +163,7 @@ export async function help(parts = []) {
   if (!key || key === "help") return `fission — rent machines and run tasks with your coding agent
 
 Usage: fission                     Open the Rust task dashboard
+       fission install             Install the agent skill
        fission rent NAME ...      Prepare a machine for your own use
        fission ssh NAME           Connect to a ready machine
        fission run NAME ... -- CMD Plan and execute one managed task
@@ -180,6 +181,7 @@ Durations: s/m/h/d, at least 60s; provider availability and authorization bound 
 Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
+  if (key === "install") return "fission install — Install the bundled agent skill.\n\nUsage: fission install [--output DIR]\n\nDefaults to ~/.agents/skills/fission. Preserves an existing different skill.";
   if (key === "rent") return `fission rent — ${rent}`;
   if (key === "ssh") return "fission ssh — Connect to a ready machine.\n\nUsage: fission ssh NAME [--tmux]\n\nRequires an interactive terminal. Disconnecting leaves its managed lifetime intact.\nUse fission stop NAME when finished.";
   if (key === "run") return `fission run — ${run}`;

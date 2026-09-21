@@ -12,7 +12,7 @@ and verify its checksum ([installation guide](docs/install.md)). Requires Node.j
 
 ```sh
 npm install -g ./fission-0.1.0-PLATFORM.tgz --ignore-scripts
-fission advanced skill install
+fission install
 fission
 ```
 

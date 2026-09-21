@@ -18,7 +18,7 @@ Verify the downloaded file with `shasum -a 256 -c PACKAGE.tgz.sha256` on macOS o
 
 ```sh
 npm install -g ./PACKAGE.tgz --ignore-scripts
-fission advanced skill install
+fission install
 fission
 ```
 

@@ -29,7 +29,7 @@ jobs:
           cli="$RUNNER_TEMP/fission-install/node_modules/fission/src/cli.mjs"
           node "$cli" help
           node "$cli" help rent
-          node "$cli" advanced skill install --output "$RUNNER_TEMP/fission-skill"
+          node "$cli" install --output "$RUNNER_TEMP/fission-skill"
           test -x "$RUNNER_TEMP/fission-install/node_modules/fission/tui/target/release/fission-tui"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

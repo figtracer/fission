@@ -97,10 +97,10 @@ async function main() {
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission status --json for task data.");
-  if (!advanced && !["ui", "run", "rent", "ssh", "status", "stop", "help", "budget", "campaign"].includes(command))
+  if (!advanced && !["ui", "run", "rent", "ssh", "status", "stop", "help", "budget", "campaign", "install"].includes(command))
     throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
-    skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
+    install: ["output"], skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: ["plan", "approve"], stop: [], supervise: [],
     prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
@@ -114,7 +114,7 @@ async function main() {
   }
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
-  const arity = { skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { install: 1, skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   arity.stop = 2; arity.supervise = 2;
   if (!advanced) { arity.run = 2; arity.rent = 2; arity.status = name ? 2 : 1; }
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission help ${command}.`);
@@ -124,8 +124,9 @@ async function main() {
     case "supervise": await supervise(name); break;
     case "stop": emit(await stopTask(name)); break;
     case "help": console.log(await help(positionals.slice(1))); break;
+    case "install":
     case "skill":
-      if (name !== "install") throw new Error("Use fission skill install.");
+      if (command === "skill" && name !== "install") throw new Error("Use fission install.");
       emit(await (await import("./onboarding.mjs")).installSkill(values.output)); break;
     case "guide": console.log(await (await import("./onboarding.mjs")).guide(name)); break;
     case "report": emit(await (await import("./reports.mjs")).report(name, first, values)); break;
