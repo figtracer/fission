@@ -1,9 +1,12 @@
 # Fission
 
-> Managed, bounded Linux runs for Foundry, Reth, Tempo, and a plain Linux fallback. The coding agent remains local; no LLM runs on the VM.
+> Rent machines and run tasks with your coding agent. Built-in Foundry, Reth and Tempo setup, plus custom Linux environments. Payments use MPP on Tempo.
 
 Normal interface:
-- `fission` — Rust task dashboard
+- `fission` — Rust dashboard
+- `fission install` — install the agent skill
+- `fission rent NAME ...` — prepare a machine for access; preview before approval
+- `fission ssh NAME` — connect to a ready machine
 - `fission run NAME ... -- ARGV` — preview by default; `--approve` executes
 - `fission status [NAME] [--resume] [--wait DURATION]`
 - `fission stop NAME`
