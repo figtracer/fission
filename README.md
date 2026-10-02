@@ -21,7 +21,8 @@ The package includes the Rust dashboard and agent skill. Configure your
 
 Tell your agent: **“Get me a Linux machine within this budget,”**
 **“Run this PR on Linux,”** or **“Run this Python check cheaply.”**
-Fission keeps the results and spending locally. Rentals have a deadline;
+Fission keeps results, spending and reusable source dependencies locally.
+Compatible preparation carries over to later runs automatically. Rentals have a deadline;
 short code jobs finish without leaving a machine running.
 
 Use `fission help` to explore commands and `fission help code` for short jobs.

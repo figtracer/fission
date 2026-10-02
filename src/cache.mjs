@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { locked, readJSON, root, writeJSON } from "./state.mjs";
@@ -7,6 +7,10 @@ import { execute } from "./provider.mjs";
 import { fingerprint } from "./experiments.mjs";
 import { storageRoot, storage } from "./storage.mjs";
 import { listHostCaches, publishHostCache, stageHostCache } from "./cache-host.mjs";
+
+// Download caches are optional cleanup work: cap each transfer at 512 MiB,
+// rather than letting a large free disk consume the whole cleanup window.
+const downloadCacheMaximum = 512 * 1024 * 1024;
 
 const identifier = (cacheRoot, id) => {
   if (!/^[a-f0-9]{64}$/.test(id || "")) throw new Error("Use a SHA-256 cache ID from cache list.");
@@ -28,7 +32,10 @@ export async function listCaches(path, cacheWorkspace) {
   const cacheRoot = join(storageRoot(path), "builds");
   await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
   const names = await readdir(cacheRoot);
-  const records = await Promise.all(names.filter((name) => /^[a-f0-9]{64}$/.test(name)).sort().map((id) => readJSON(join(identifier(cacheRoot, id), "cache.json"))));
+  const records = await Promise.all(names.filter((name) => /^[a-f0-9]{64}$/.test(name)).sort().map((id) => readJSON(join(identifier(cacheRoot, id), "cache.json")).catch((error) => {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  })));
   return records.filter(Boolean);
 }
 
@@ -48,16 +55,33 @@ export async function cachePreflight(options, definition) {
     backend: cacheWorkspace ? { kind: "workspace", name: cacheWorkspace, remoteId: location.remoteId,
       providerExpiresAt: location.providerExpiresAt } : { kind: "directory", directory: location.directory },
     ...(cacheWorkspace ? { maximum } : { directory: location.directory }),
-    candidate: null, excluded: [], note: "Exact guest identity must match. No Cargo target/test cache or cross-commit reuse is implied." };
+    candidate: null, excluded: [], note: "Release binaries require exact guest identity; dependency download reuse is reported separately." };
+  if (!cacheWorkspace) {
+    const maximum = Math.min(downloadCacheMaximum, Math.floor(location.availableBytes / 2));
+    result.dependencies = { kind: "cargo-downloads", directory: location.directory, maximum, candidate: null, excluded: [] };
+    for (const record of records.filter((item) => item.kind === "cargo-downloads" && item.recipe === definition.name)
+      .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))) {
+      try {
+        if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.bytes) || record.bytes <= 0 || record.bytes > maximum ||
+            !Number.isSafeInteger(record.uncompressedBytes) || record.uncompressedBytes <= 0 || record.uncompressedBytes > maximum)
+          throw new Error("Download cache exceeds its size limit or schema differs");
+        const path = join(identifier(join(location.directory, "builds"), record.id), "build.tar.gz");
+        const actual = await fingerprint(path);
+        if (actual.sha256 !== record.id || actual.bytes !== record.bytes) throw new Error("Download cache digest or size differs");
+        result.dependencies.candidate = { id: record.id, local: path, bytes: actual.bytes, maximum };
+        break;
+      } catch (error) { result.dependencies.excluded.push({ id: record.id, reason: error.message }); }
+    }
+  }
   if (options.mode !== "build" || options.patch) {
-    result.note = options.patch ? "Patched source is not eligible for clean binary caches." : "Release binaries cannot accelerate Cargo test compilation; no test cache is claimed.";
+    result.note = options.patch ? "Patched source compiles normally and can reuse matching dependency downloads." : "Cargo compiles and runs tests normally; matching dependency downloads can be reused.";
     result.inspected = records.length;
     return result;
   }
   const harness = await fingerprint(new URL("../harness/rust-source.py", import.meta.url));
   for (const record of records.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))) {
     const identity = record.identity;
-    if (identity?.commit !== options.ref || JSON.stringify(identity.binaries) !== JSON.stringify(sourceRecipes[definition.name])) continue;
+    if (record.kind === "cargo-downloads" || identity?.commit !== options.ref || JSON.stringify(identity.binaries) !== JSON.stringify(sourceRecipes[definition.name])) continue;
     try {
       if (!identity.clean || !identity.tree || identity.harnessSha256 !== harness.sha256)
         throw new Error("Source identity schema or preparation harness differs");
@@ -163,7 +187,9 @@ export async function buildCache(action, name, id, limit, storageDirectory, opti
     if (!Object.hasOwn(sourceRecipes, state.recipe.name)) throw new Error("Build caches require a prepared source recipe.");
     if (action === "save" && !(await storage(storageDirectory, maximum)).fits) throw new Error("Local storage has less free space than the chosen byte limit. Select --storage-dir or a smaller explicit limit.");
     const remote = `/workspace/.fission/cache-${randomUUID()}.tar.gz`;
-    const command = ["python3", "/workspace/.fission/rust-source.py", `cache-${action}`, remote];
+    const command = options.dependencies
+      ? ["python3", "-c", await readFile(new URL("../harness/cargo-cache.py", import.meta.url), "utf8"), "save", remote]
+      : ["python3", "/workspace/.fission/rust-source.py", `cache-${action}`, remote];
     if (action === "restore") {
       const folder = identifier(cacheRoot, id), path = join(folder, "build.tar.gz");
       const metadata = await readJSON(join(folder, "cache.json"));
@@ -180,7 +206,7 @@ export async function buildCache(action, name, id, limit, storageDirectory, opti
     const result = await execute(state, command, operationCap, undefined, options);
     if (result.returncode !== 0) throw new Error(`Cache ${action} failed: ${result.stderr.slice(-2000)}`);
     const observation = JSON.parse(result.stdout);
-    if (action === "restore") return observation;
+    if (action === "restore" || observation.saved === false) return observation;
     if (!/^[a-f0-9]{64}$/.test(observation.sha256 || "") || !Number.isSafeInteger(observation.bytes) || observation.bytes <= 0 || observation.bytes > maximum ||
         !Number.isSafeInteger(observation.uncompressedBytes) || observation.uncompressedBytes <= 0 || observation.uncompressedBytes > maximum)
       throw new Error("Invalid remote cache size or digest; no download started.");
@@ -188,13 +214,16 @@ export async function buildCache(action, name, id, limit, storageDirectory, opti
     const staging = join(cacheRoot, `.partial-${randomUUID()}`);
     await mkdir(staging, { mode: 0o700 });
     const path = join(staging, "build.tar.gz");
-    await download(state, remote, path, options);
+    await download(state, remote, path, { ...options, expected: { size: observation.bytes, sha256: observation.sha256, maximum } });
     const actual = await fingerprint(path);
     if (actual.sha256 !== observation.sha256 || actual.bytes !== observation.bytes) throw new Error("Cache changed during transfer; partial files retained.");
-    const record = { ...observation, id: actual.sha256, machine: name, savedAt: new Date().toISOString(), archive: "build.tar.gz" };
+    const record = { ...observation, ...(options.dependencies ? { recipe: state.recipe.name } : {}), id: actual.sha256, machine: name, savedAt: new Date().toISOString(), archive: "build.tar.gz" };
     await writeJSON(join(staging, "cache.json"), record);
     try { await rename(staging, identifier(cacheRoot, record.id)); }
-    catch (error) { if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error; }
+    catch (error) {
+      if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+      await rm(staging, { recursive: true, force: true });
+    }
     return record;
   });
 }

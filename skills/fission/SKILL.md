@@ -115,6 +115,8 @@ When selected resources exceed public-alpha automatic-resize limits, use `--no-r
 
 For test/build use a public GitHub `--repo`, full 40-character `--ref`, and optional one-time `--patch`. Use `--input FILE[=/workspace/path]` for workload files and `--artifact /workspace/file` for bounded results. Reject vacuous tests.
 
+Source preparation reuse is automatic: exact-identity release builds can reuse binaries, and local crates.io downloads carry across source tests, builds and patches. Check the preview candidate and `dependency-cache-result.json` for actual reuse. Cargo still compiles/tests the requested revision. Cache collection follows evidence within the existing cleanup cutoff.
+
 For several machines, use `fission run NAME --from FILE --budget TOTAL`. Every role has its own task, budget, evidence, and cleanup. Purchases are sequential and non-atomic; shared corpus, result reduction, coordination, and networking remain workload responsibilities.
 
 Fallback is allowed only before purchase intent. An ambiguous creation never authorizes a replacement VM or replay. Do not add wallets, keys, swaps, bridges, or on-ramps; only the MPP/Tempo purchase path is implemented. Cache VPSes are separately authorized retained workspaces, never replacements or cloud backups.

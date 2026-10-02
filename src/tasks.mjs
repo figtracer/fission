@@ -89,6 +89,17 @@ async function planTask(name, options, command, experiment) {
   if (task.mode !== "custom" && task.harness !== "linux") task.guidance = await guidance("", { ...options, harness: task.harness, mode: task.mode });
   if (["test", "build"].includes(task.mode)) {
     task.cache = await cachePreflight({ ...options, mode: task.mode }, definition);
+    const downloads = task.cache.dependencies?.candidate;
+    if (downloads) {
+      const remote = "/workspace/.fission/dependency-cache.tar.gz";
+      if (task.inputs.some((input) => input.remote === remote)) throw new Error("Input conflicts with the selected dependency cache.");
+      task.inputs.push({ local: downloads.local, remote, bytes: downloads.bytes, sha256: downloads.id, optionalCache: true });
+      const command = ["python3", "-c", await readFile(new URL("../harness/cargo-cache.py", import.meta.url), "utf8"),
+        "restore", remote, String(downloads.maximum), downloads.id];
+      const build = task.preparation.findIndex((argv) => argv[2] === "ensure-build");
+      task.preparation.splice(build < 0 ? task.preparation.length : build, 0, command);
+      task.artifacts.push("/workspace/dependency-cache-result.json");
+    }
     const candidate = task.cache.candidate;
     if (candidate) {
       const remote = "/workspace/.fission/build-cache.tar.gz";
@@ -220,7 +231,7 @@ export function nextTaskStep(state, jobs, now = Date.now()) {
   const bootstrap = jobs.find((job) => job.id === (state.repairJob || state.bootstrapJob));
   if (!bootstrap || !jobDone(bootstrap) || bootstrap.phase === "succeeded" && state.phase !== "ready") return "bootstrap";
   if (bootstrap.phase !== "succeeded") return "finish";
-  if (task.inputs.some((input) => !input.uploadedAt)) return "upload";
+  if (task.inputs.some((input) => !input.uploadedAt && !input.cacheSkippedAt)) return "upload";
   const preparation = jobs.find((job) => job.id === "preparation");
   if (task.preparation.length && !preparation) return "launch-preparation";
   if (preparation && !jobDone(preparation)) return "preparation";
@@ -380,6 +391,25 @@ async function finish(name, jobs) {
   } else if (state.task.cache?.save?.phase === "attempted") {
     await update(name, (task) => { task.cache.save = { phase: "unresolved", reason: "Owner interrupted during cache save; not replayed" }; });
   }
+  if (state.task.cache?.dependencies && state.task.kind !== "rental") {
+    if (!state.task.cache.dependencies.save) {
+      const eligible = jobs.some((job) => job.id === "work" && jobDone(job)) && Date.now() < transfer.deadline;
+      await update(name, (task) => { task.cache.dependencies.save = { phase: eligible ? "attempted" : "skipped" }; });
+      if (eligible) {
+        try {
+          const cache = state.task.cache.dependencies;
+          const record = await buildCache("save", name, undefined, cache.maximum, cache.directory, { ...transfer, dependencies: true });
+          await update(name, (task) => { task.cache.dependencies.save = record.saved === false
+            ? { phase: "skipped", reason: record.reason }
+            : { phase: "saved", id: record.id, bytes: record.bytes, crates: record.crates, seconds: record.seconds }; });
+        } catch (error) {
+          await update(name, (task) => { task.cache.dependencies.save = { phase: "unresolved", reason: error.message }; });
+        }
+      }
+    } else if (state.task.cache.dependencies.save.phase === "attempted") {
+      await update(name, (task) => { task.cache.dependencies.save = { phase: "unresolved", reason: "Owner interrupted during cache save; not replayed" }; });
+    }
+  }
   await close(name, { "discard-output": true });
 }
 
@@ -469,7 +499,7 @@ export async function supervise(name) {
         }
         else if (["bootstrap", "preparation", "work"].includes(step)) await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true);
         else if (step === "upload") {
-          const pending = state.task.inputs.find((item) => !item.uploadedAt);
+          const pending = state.task.inputs.find((item) => !item.uploadedAt && !item.cacheSkippedAt);
           let staged;
           if (pending.cache && !pending.local) {
             const deadline = Math.min(state.task.deadline - state.task.timing.cleanupSeconds * 1000,
@@ -487,28 +517,36 @@ export async function supervise(name) {
           if (!pending.cache || pending.local || staged) await update(name, async (task, state) => {
             const transfer = { deadline: Math.min(task.deadline - task.timing.cleanupSeconds * 1000,
               Date.parse(state.requestedAt) + (task.timing.provisioningSeconds + task.timing.preparationSeconds) * 1000) };
-            const input = task.inputs.find((item) => !item.uploadedAt);
-            const actual = await fingerprint(input.local);
-            if (actual.sha256 !== input.sha256 || actual.bytes !== input.bytes) {
-              task.outcome = "preparation_failed";
-              task.lastError = "Input changed after quote; refusing upload.";
-              return;
-            }
-            if (input.attemptedAt) {
-              const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
-              const result = await execute(state, ["python3", "-c", script, "metadata", input.remote], operationCap, undefined, transfer);
-              const observed = result.returncode === 0 ? JSON.parse(result.stdout) : null;
-              if (observed?.sha256 !== input.sha256 || observed?.size !== input.bytes) {
+            const input = task.inputs.find((item) => !item.uploadedAt && !item.cacheSkippedAt);
+            try {
+              const actual = await fingerprint(input.local);
+              if (actual.sha256 !== input.sha256 || actual.bytes !== input.bytes) {
+                if (input.optionalCache) throw new Error("Cache changed after quote; using a cold run.");
                 task.outcome = "preparation_failed";
-                task.lastError = "Input upload unresolved; no repeated transfer.";
+                task.lastError = "Input changed after quote; refusing upload.";
                 return;
               }
-            } else {
-              input.attemptedAt = new Date().toISOString();
-              await save(state);
-              await upload(state, input.local, input.remote, transfer);
+              if (input.attemptedAt) {
+                const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
+                const result = await execute(state, ["python3", "-c", script, "metadata", input.remote], operationCap, undefined, transfer);
+                const observed = result.returncode === 0 ? JSON.parse(result.stdout) : null;
+                if (observed?.sha256 !== input.sha256 || observed?.size !== input.bytes) {
+                  if (input.optionalCache) throw new Error("Cache upload unresolved; using a cold run.");
+                  task.outcome = "preparation_failed";
+                  task.lastError = "Input upload unresolved; no repeated transfer.";
+                  return;
+                }
+              } else {
+                input.attemptedAt = new Date().toISOString();
+                await save(state);
+                await upload(state, input.local, input.remote, transfer);
+              }
+              input.uploadedAt = new Date().toISOString();
+            } catch (error) {
+              if (!input.optionalCache) throw error;
+              input.cacheSkippedAt = new Date().toISOString();
+              input.cacheMiss = error.message;
             }
-            input.uploadedAt = new Date().toISOString();
           });
           if (staged) {
             try { await rm(dirname(staged), { recursive: true, force: true }); }
