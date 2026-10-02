@@ -35,6 +35,8 @@ Ecosystem-specific options: fission help foundry, reth, or tempo.
 Source tasks inspect local caches before quotes. Binary cache candidates require
 exact guest verification; they are not Cargo test caches. See help harnesses.
 
+Short code execution: fission help code (Judge0, no VM required).
+
 Task file: fission run NAME --from task.json --budget TOTAL [--approve]
 Use {schemaVersion: 1, task: {...run options, command: ["program", "arg"]}}.
 Choose a built-in harness, or supply an embedded recipe plus cpu, memory, disk,
@@ -181,6 +183,23 @@ Durations: s/m/h/d, at least 60s; provider availability and authorization bound 
 Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
+  if (key === "code") return `Run a short source file through Judge0 using MPP.
+
+Usage: fission run NAME --from FILE --budget AMOUNT [--approve]
+       fission status NAME
+
+FILE: {"schemaVersion":1,"execution":{"provider":"judge0","source":"check.py",
+"language":71,"cpuSeconds":1,"wallSeconds":3,"memoryKiB":128000}}
+
+Paths resolve beside FILE. Optional stdin, expectedOutput and output directory.
+Language is the provider's numeric language ID (71 is Python 3); resource limits
+must be explicit. Network access is disabled. Preview sends source for a fresh
+quote but never pays. Approval executes once and saves stdout, stderr, status,
+timings, source hash, receipt and local run.md/run.json under fission/NAME/TIME.
+Budget shares the existing aggregate authorization. Provider errors still may cost
+money. Status, stop and resume read saved results and never submit another payment.
+This backend has no SSH, repository checkout, preparation harness or persistent VM.
+Use an ordinary Linux run when the task needs those capabilities.`;
   if (key === "install") return "fission install — Install the bundled agent skill.\n\nUsage: fission install [--output DIR]\n\nDefaults to ~/.agents/skills/fission. Preserves an existing different skill.";
   if (key === "rent") return `fission rent — ${rent}`;
   if (key === "ssh") return "fission ssh — Connect to a ready machine.\n\nUsage: fission ssh NAME [--tmux]\n\nRequires an interactive terminal. Disconnecting leaves its managed lifetime intact.\nUse fission stop NAME when finished.";

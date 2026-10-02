@@ -12,6 +12,7 @@ import { runTask, runFile, taskStatus, resumeTask, stopTask, supervise } from ".
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
 import { help } from "./help.mjs";
+import { runCodeFile, codeStatus } from "./code.mjs";
 
 function summary(state) {
   return {
@@ -122,7 +123,7 @@ async function main() {
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
     case "supervise": await supervise(name); break;
-    case "stop": emit(await stopTask(name)); break;
+    case "stop": emit(await codeStatus(name) || await stopTask(name)); break;
     case "help": console.log(await help(positionals.slice(1))); break;
     case "install":
     case "skill":
@@ -200,7 +201,8 @@ async function main() {
     case "run": {
       if (!advanced) {
         if (values.from && tail.length) throw new Error("The task file supplies workload argv; do not add a command after --.");
-        const result = values.from ? await runFile(name, values) : await runTask(name, values, tail); emit(result);
+        const result = values.from ? await runCodeFile(name, values) || await runFile(name, values) : await runTask(name, values, tail); emit(result);
+        if (result.outcome === "failed") process.exitCode = 1;
         if (result.status === "unavailable") process.exitCode = 2;
         break;
       }
@@ -240,6 +242,8 @@ async function main() {
     }
     case "status": {
       if (!advanced) {
+        const code = name ? await codeStatus(name) : null;
+        if (code) { emit(code); if (values.wait && code.outcome !== "succeeded") process.exitCode = code.phase === "done" ? 1 : 2; break; }
         if (!name && (values.resume || values.refresh || values.wait)) throw new Error("Select one task for --resume, --refresh or --wait.");
         if (values.resume) await resumeTask(name);
         if (values.refresh) {
@@ -251,7 +255,7 @@ async function main() {
         const until = Date.now() + (values.wait ? duration(values.wait) * 1000 : 0);
         let result;
         do {
-          result = await taskStatus(name);
+          result = name ? await taskStatus(name) : await Promise.all((await list()).map(async state => await codeStatus(state.name) || await taskStatus(state.name)));
           if (!values.wait || result.phase === "done" || result.kind === "rental" && result.ready) break;
           await delay(Math.min(1000, Math.max(0, until - Date.now())));
         } while (Date.now() < until);

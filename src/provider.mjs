@@ -89,9 +89,16 @@ export function runProcess(command, args, options = {}) {
   });
 }
 
+function requestURL(provider, operation) {
+  if (provider === "compute-mpp" && operation === "create") return "https://compute.x402layer.cc/compute/provision";
+  if (provider === "modal-tempo" && ["create", "exec", "status", "terminate"].includes(operation)) return endpoint + operation;
+  if (provider === "judge0" && operation === "execute-code") return "https://judge0.mpp.paywithlocus.com/judge0/execute-code";
+  throw new Error(`Unsupported ${provider} operation ${operation}; no request submitted.`);
+}
+
 export async function quote(operation, body, provider = "modal-tempo") {
   provider = providerId(provider);
-  const url = provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
+  const url = requestURL(provider, provider === "compute-mpp" ? "create" : operation);
   const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url], { timeoutMs: 60000 });
   if (result.code !== 0) {
     let detail = "";
@@ -121,6 +128,7 @@ export async function request(state, operation, body, maximum, id = randomUUID()
     throw new Error("File streams require the VM SSH transport.");
   if (state.provider === "compute-mpp" && operation !== "create")
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
+  const url = requestURL(state.provider, operation);
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
   const responsePath = join(dir, `${id}.response.json`);
@@ -133,7 +141,6 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   for (const path of [responsePath, metaPath]) {
     const file = await open(path, "wx", 0o600); await file.close();
   }
-  const url = state.provider === "compute-mpp" ? "https://compute.x402layer.cc/compute/provision" : endpoint + operation;
   const result = await runProcess(tempo, ["request", ...paymentOptions, "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
   const metaText = await readFile(metaPath, "utf8");

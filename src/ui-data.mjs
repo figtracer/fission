@@ -10,6 +10,7 @@ import { providerWarning } from "./provider.mjs";
 import { storage } from "./storage.mjs";
 import { sshReady } from "./compute.mjs";
 import { availableMachines, quoteMachine } from "./ui-catalog.mjs";
+import { codeStatus } from "./code.mjs";
 import { providers } from "./plans.mjs";
 
 const money = (value) => {
@@ -23,7 +24,10 @@ async function main() {
   const [action, name] = process.argv.slice(2);
   let message = "";
   let available = action === "snapshot" ? await availableMachines({ cached: true }) : undefined;
-  if (action === "close") {
+  const code = name ? await codeStatus(name) : null;
+  if (code && ["close", "resume", "refresh"].includes(action)) {
+    message = `${name}: ${code.phase}. ${code.note}`;
+  } else if (action === "close") {
     if ((await load(name)).task) {
       await stopTask(name);
       message = `${name}: stop requested; cleanup continues in the supervisor.`;
@@ -44,7 +48,8 @@ async function main() {
   const states = await list(), report = await spending({ refresh: action === "verify" });
   if (action === "verify") message = report.refreshError || "Payment receipts checked; missing amounts remain unknown.";
   const machines = await Promise.all(states.map(async (state) => {
-    const task = state.task ? await taskStatus(state.name) : null;
+    const code = await codeStatus(state.name);
+    const task = code || (state.task ? await taskStatus(state.name) : null);
     const transactions = report.transactions.filter((item) => item.workspaces.includes(state.name));
     const paid = report.unknownWorkspaces?.includes(state.name) || !transactions.length ||
       transactions.some((item) => item.paid === null || item.workspaces.length !== 1) ? null :
@@ -56,15 +61,15 @@ async function main() {
       name: state.name,
       phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
       managed: Boolean(task), experiment: task?.experiment || null,
-      taskDetail: task ? `${task.kind === "rental" ? "rental | " : ""}${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
+      taskDetail: code ? `Judge0 | one-shot code | cleanup not applicable` : task ? `${task.kind === "rental" ? "rental | " : ""}${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
       active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
       ssh: sshReady(state) && (task?.kind !== "rental" || task.ready),
       requested: state.requestedAt || "", expiry: Math.floor(((task?.usableUntil ? Date.parse(task.usableUntil) : state.task?.deadline) || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,
       estimated: !task && !state.providerExpiresAt, paid: money(paid === null ? null : amount(paid)), paidUnits: paid?.toString() ?? null,
-      capacity: capacity?.cpu ? `${capacity.cpu} vCPU / ${capacity.memoryGiB} GiB RAM / ${Math.floor(capacity.diskGiB)} GiB disk` : "unreserved sandbox",
+      capacity: code ? "one-shot code execution" : capacity?.cpu ? `${capacity.cpu} vCPU / ${capacity.memoryGiB} GiB RAM / ${Math.floor(capacity.diskGiB)} GiB disk` : "unreserved sandbox",
       started: date(state.requestedAt), ended: date(finished ? state.closedAt : task?.deadline || state.providerExpiresAt || state.deadlineEstimate),
       cap: money(state.totalCap), quote: money(state.creationQuote), exported: task?.report || state.exportedTo || "",
-      checkCap: state.provider === "compute-mpp" ? "0" : operationCap,
+      checkCap: code || state.provider === "compute-mpp" ? "0" : operationCap,
       transactions: transactions.map((item) => ({ paid: money(item.paid), operation: item.operation || "unknown", hash: item.hash })),
     };
   }));

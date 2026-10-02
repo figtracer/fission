@@ -124,7 +124,7 @@ export async function reserve(state, operation, maximum, id) {
     if (units(cap) !== units(ledger.allocations[state.name])) throw new Error("Workspace budget differs from its durable allocation.");
     const used = Object.values(ledger.requests).filter((item) => item.name === state.name).reduce((sum, item) => sum + units(item.maximum), 0n);
     const closing = Object.values(ledger.requests).some((item) => item.name === state.name && item.operation === "terminate");
-    const reserveForClose = operation === "terminate" || (operation === "status" && closing) ? 0n : terminationReserve;
+    const reserveForClose = state.kind === "code-execution" || operation === "terminate" || (operation === "status" && closing) ? 0n : terminationReserve;
     if (used + units(maximum) + reserveForClose > units(cap)) throw new Error("Workspace budget exhausted; termination reserve is protected.");
     ledger.requests[id] = { name: state.name, operation, maximum, reservedAt: new Date().toISOString() };
     await writeJSON(path, ledger);

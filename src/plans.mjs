@@ -8,6 +8,21 @@ import { catalog, machineCapabilities } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
 export const providers = [{
+  id: "judge0", available: true, gateway: "Locus MPP", operator: "Judge0",
+  price: "Live per-execution quote; observed $0.006 on October 2, 2026", payment: "MPP tempo.charge",
+  capabilities: { kind: "code-execution", p2p: false, expiry: true },
+  limitations: "Short source-file execution via run --from; explicit language and limits, network disabled. No SSH or VM setup. See help code.",
+  evidence: "https://paywithlocus.com/mpp/judge0.md",
+}, {
+  id: "buildwithlocus", available: false, gateway: "Locus MPP", operator: "Locus",
+  price: "Billing guide: $1.50 per service/month for MPP-funded workspaces; overview advertises $0.25", payment: "MPP credit top-up",
+  reason: "October 2, 2026: signup and billing reads verified. Persistent ARM64 containers with monthly credit billing; managed deletion, credit reconciliation and deadline enforcement remain unqualified.",
+  evidence: "https://buildwithlocus.com/billing.md",
+}, {
+  id: "digitalocean", available: false, gateway: "Same compute gateway", operator: "DigitalOcean",
+  reason: "October 2, 2026: 42 live vps catalog plans observed. Provider-specific OS selection, SSH provisioning and deletion need qualification before managed purchase; existing Vultr presets must not be reused.",
+  evidence: "https://studio.x402layer.cc/docs/agentic-access/x402-compute",
+}, {
   id: "modal-tempo", available: true, gateway: "Tempo", operator: "Modal",
   price: "Dynamic creation + $0.0001 per lifecycle call", payment: "MPP tempo.charge",
   capabilities: { os: "linux", kind: "sandbox", architecture: null, cpu: null, memoryGiB: null, diskGiB: null, p2p: false, customImage: false, expiry: true },
