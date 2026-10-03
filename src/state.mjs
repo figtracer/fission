@@ -59,6 +59,54 @@ export async function list() {
 
 export const locked = (name, action, waitMs = 0) => fileLocked(join(directory(name), "operation.lock"), action, waitMs);
 
+// Controller-managed state belongs to one Linux host. Ordinary local state keeps
+// its existing format; binding is opt-in through controller install/run.
+export async function hostIdentity() {
+  if (process.platform !== "linux") throw new Error("The always-on controller requires a Linux host.");
+  const host = (await readFile("/etc/machine-id", "utf8")).trim();
+  const boot = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+  if (!/^[a-f0-9]{32}$/.test(host) || !/^[a-f0-9-]{36}$/.test(boot)) throw new Error("Cannot verify this controller host and boot identity.");
+  return { host, boot };
+}
+
+export async function assertControllerHost() {
+  const binding = await readJSON(join(root, ".controller.json"));
+  if (!binding) return;
+  const identity = await hostIdentity();
+  if (binding.schemaVersion !== 1 || binding.host !== identity.host || binding.root !== root)
+    throw new Error("This state belongs to another controller host or path. Use SSH to its owner; do not copy live state.");
+}
+
+async function processStart(pid) {
+  try { return (await readFile(`/proc/${pid}/stat`, "utf8")).split(") ").at(-1).split(" ")[19]; }
+  catch { return null; }
+}
+
+export async function ownerAlive(owner) {
+  if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return true;
+  if (owner.host || owner.boot || owner.start) {
+    if (process.platform !== "linux" || !/^[a-f0-9]{32}$/.test(owner.host || "") ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.boot || "") ||
+        typeof owner.start !== "string" || !/^[0-9]+$/.test(owner.start)) return true;
+    const identity = await hostIdentity();
+    if (identity.host !== owner.host) return true;
+    if (identity.boot !== owner.boot) return false;
+    const start = await processStart(owner.pid);
+    if (start && start !== owner.start) return false;
+  }
+  return processAlive(owner.pid);
+}
+
+// Purchasing needs positive ownership proof, unlike recovery which preserves
+// uncertain locks. A foreign, malformed or legacy PID-only lock is not readiness.
+export async function controllerRunning() {
+  const owner = await readJSON(join(root, ".controller.lock"));
+  if (!owner || process.platform !== "linux" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
+  const identity = await hostIdentity();
+  return owner.host === identity.host && owner.boot === identity.boot &&
+    typeof owner.start === "string" && owner.start === await processStart(owner.pid) && processAlive(owner.pid);
+}
+
 export function processAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return true; // Unknown ownership is not an abandoned lock.
   try { process.kill(pid, 0); return true; }
@@ -69,13 +117,13 @@ export function processAlive(pid) {
 // acquiring that claim: two resumers must not unlink a newly acquired lock.
 export async function recoverLock(path) {
   const owner = await readJSON(path);
-  if (!owner || processAlive(owner.pid)) return;
+  if (!owner || await ownerAlive(owner)) return;
   let claim;
   try { claim = await open(`${path}.recovery`, "wx", 0o600); }
   catch (error) { if (error.code === "EEXIST") return; throw error; }
   try {
     const current = await readJSON(path);
-    if (current && !processAlive(current.pid)) await unlink(path);
+    if (current && !await ownerAlive(current)) await unlink(path);
   } finally { await claim.close(); await unlink(`${path}.recovery`); }
 }
 
@@ -90,7 +138,13 @@ async function claimLock(path) {
   const temp = `${path}.${randomUUID()}.tmp`;
   const file = await open(temp, "wx", 0o600);
   try {
-    await file.writeFile(JSON.stringify({ pid: process.pid }));
+    let identity = {};
+    if (process.platform === "linux") {
+      try { identity = { ...await hostIdentity(), start: await processStart(process.pid) }; }
+      catch { /* Unbound containers may have no machine-id; retain PID ownership. */ }
+    }
+    await file.writeFile(JSON.stringify({ pid: process.pid, ...identity }));
+    await file.sync();
   } finally { await file.close(); }
   try {
     await link(temp, path);
@@ -102,6 +156,7 @@ async function claimLock(path) {
 }
 
 export async function fileLocked(path, action, waitMs = 0) {
+  await assertControllerHost();
   const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true, mode: 0o700 });
   let acquired = false;

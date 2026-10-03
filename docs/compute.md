@@ -6,10 +6,9 @@ inside a managed environment; a short code job returns a result without leaving
 a machine to connect to. Use Judge0 for a short, self-contained source file.
 
 The payment gateway sells access; the infrastructure operator runs the machine.
-For example, the compute gateway provisions VMs on Vultr. SSH goes directly to
+For example, the compute gateway provisions VMs on Vultr and DigitalOcean. SSH goes directly to
 the guest, while provisioning and deletion go through the gateway. Both parties
-see rental metadata, and the operator remains trusted with execution. See
-[data and privacy](privacy.md).
+see rental metadata, and the operator remains trusted with execution.
 
 ## Short code jobs
 
@@ -53,17 +52,20 @@ outflow are distinct from the quoted service charge.
 
 | Option | Workload | Integration |
 | --- | --- | --- |
-| Compute gateway / Vultr | Linux VMs and prepared environments | Managed rentals and tasks |
+| Compute gateway / Vultr and DigitalOcean | Linux VMs and prepared environments | Managed rentals and tasks |
 | Modal | Sandboxes | Existing sandbox interface |
 | Judge0 / Locus MPP | Short code execution | `run --from`, `status`, local results |
 | Build With Locus | ARM64 container services and databases | Discovery; recurring credit billing needs separate lifecycle support |
-| Compute gateway / DigitalOcean | Linux VMs | Discovery; OS selection and lifecycle qualification pending |
 
 Locus's [billing guide](https://buildwithlocus.com/billing.md) specifies $1.50 per
 service/month for MPP-funded workspaces (checked October 2, 2026). This differs
 from its overview's $0.25 headline. Signup and funding quotes are separate from
 container creation. Fission does not automatically fund a shared credit account
 or treat workspace credit as a per-task spending limit.
+
+DigitalOcean uses Ubuntu 24.04 and a minimum prepaid day. Select a `do:` machine
+and its listed region, or let Fission compare compatible offers. Purchase, SSH,
+execution, collection and deletion were verified on October 3, 2026.
 
 DigitalOcean plans are exposed by the same compute gateway as Vultr; another
 operator does not provide independent gateway failover. Catalog listings alone
@@ -75,7 +77,9 @@ Checked October 3, 2026; these are discovery results, not qualified integrations
 
 - [AgentVM](https://mpp.agentvm.sh/compute/sessions) advertises Tempo MPP sessions
   on Hetzner, up to 4 vCPU, 16 GB RAM and 160 GB disk, for up to six hours. Its
-  discovery endpoint responded, but purchase, access and cleanup still need validation.
+  discovery endpoint responded. Earlier paid checks reached SSH and observed expiry
+  cleanup, but a documented early-stop operation and durable renewal/settlement
+  remain unqualified for managed rentals.
 - [OpenVPS](https://github.com/kartojal/openvps) advertises Tempo MPP and SSH into
   Firecracker VMs. Its live endpoints were unreachable during this check.
 

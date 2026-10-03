@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { root, readJSON, writeJSON, fileLocked, list } from "./state.mjs";
+import { root, readJSON, writeJSON, fileLocked, list, controllerRunning } from "./state.mjs";
 
 export function units(value) {
   if (typeof value !== "string" || !/^(0|[1-9]\d*)(\.\d{1,6})?$/.test(value))
@@ -92,6 +92,9 @@ export async function hasTerminationReservation(state) {
 }
 
 export async function reserve(state, operation, maximum, id) {
+  if (operation === "create" && await readJSON(join(root, ".controller.json"))) {
+    if (!await controllerRunning()) throw new BudgetRejected("Controller is stopped. Start it before purchasing; no payment submitted.");
+  }
   if (operation === "exec" && units(maximum) === 0n) {
     const ledger = await readJSON(path);
     if (ledger?.requests[id]) throw new Error("Payment already reserved. Reconcile; never resubmit this request.");

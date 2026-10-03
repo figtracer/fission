@@ -11,11 +11,11 @@ Payments use MPP on Tempo.
 
 ## Install
 
-Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.1.1)
+Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.1.2)
 and verify its checksum. Requires Node.js 22.13+ and SSH.
 
 ```sh
-npm install -g ./fission-0.1.1-PLATFORM.tgz --ignore-scripts
+npm install -g ./fission-0.1.2-PLATFORM.tgz --ignore-scripts
 fission install
 fission
 ```
@@ -34,4 +34,4 @@ cleanup. Short source-file jobs can use Judge0 without renting a machine.
 
 Run `fission help` for commands.
 
-[Budgets and recovery](docs/rental.md) · [Data and privacy](docs/privacy.md)
+[Always-on controller](docs/controller.md) · [Budgets and recovery](docs/rental.md)

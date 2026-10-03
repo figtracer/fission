@@ -9,6 +9,9 @@ import { reserve } from "./budget.mjs";
 import { runProcess, validRemoteId, money, recordProviderFailure } from "./provider.mjs";
 
 const endpoint = "https://compute.x402layer.cc/compute/";
+// A public-only key satisfies DigitalOcean price discovery. Purchases always
+// use the distinct workspace key generated and bound by createPlan.
+export const quotePublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE44rHt40mw41l9RihNYQLUrJWqCPFtn6ttH5QhmPV1a fission-quote";
 const usableIP = (value) => isIP(value || "") && !["0.0.0.0", "::", "127.0.0.1", "::1"].includes(value);
 const credentials = (state) => join(directory(state.name), "compute-auth.json");
 const guestCapacityProbe = await readFile(new URL("../harness/guest-capacity.py", import.meta.url), "utf8");
@@ -186,7 +189,7 @@ async function ssh(state, command, options = {}) {
     throw error;
   }
   const result = await runProcess("ssh", [...sshArguments(state), `root@${state.sshHost}`,
-    command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, outputStream: options.outputStream, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+    command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   if (result.code === null || result.code === 255) {
     const error = new Error("SSH outcome unresolved. Inspect the existing job before executing it again.");
     error.observation = {
@@ -280,7 +283,7 @@ export async function verifyInitialization(state, stage, options = {}) {
 
 export async function computeRequest(state, operation, body, id, options = {}) {
   if (!["exec", "status", "terminate", "resize"].includes(operation)) throw new Error("Unsupported compute operation.");
-  if (operation === "resize" && (!state.lease || state.resizeRequest !== id || body.plan !== state.machine.id || body.confirm_disk_resize !== true))
+  if (operation === "resize" && (state.body?.provider === "digitalocean" || !state.lease || state.resizeRequest !== id || body.plan !== state.machine.id || body.confirm_disk_resize !== true))
     throw new Error("Resize requires the recorded target and disk-growth approval from a saved plan.");
   const path = join(directory(state.name), "requests", `${id}.json`);
   if (await readJSON(path)) throw new Error("Request already recorded; reconcile it.");
@@ -322,15 +325,18 @@ export async function computeRequest(state, operation, body, id, options = {}) {
       if (!order || order.id !== state.remoteId) throw new Error("Unrecognized compute instance response.");
       if (usableIP(order.ip_address)) state.sshHost = order.ip_address;
       const pending = order.metadata?.resize_pending;
-      state.observedMachine = order.vultr_plan;
-      state.observedServerStatus = order.vultr_server_status;
+      // Vultr enrichment is not a DigitalOcean capacity contract. Guest
+      // capacity is independently checked before any user workload starts.
+      const vultr = state.body?.provider !== "digitalocean";
+      state.observedMachine = vultr ? order.vultr_plan : undefined;
+      state.observedServerStatus = vultr ? order.vultr_server_status : undefined;
       state.resizePending = Boolean(pending) || Boolean(state.lease && state.resizeRequest &&
         (order.vultr_plan !== state.machine.id || order.vultr_server_status !== "ok"));
       const expiries = [order.expires_at, pending?.new_expires_at, state.resizePending ? state.providerExpiresAt : undefined].filter((value) => Number.isFinite(Date.parse(value)));
       if (expiries.length) state.providerExpiresAt = expiries.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       state.providerStatus = order.status;
       if (["destroyed", "terminated"].includes(order.status)) state.resizePending = false;
-      if ([order.vultr_vcpu_count, order.vultr_ram, order.vultr_disk].every((value) => Number.isFinite(value) && value > 0))
+      if (vultr && [order.vultr_vcpu_count, order.vultr_ram, order.vultr_disk].every((value) => Number.isFinite(value) && value > 0))
         state.observedResources = { cpu: order.vultr_vcpu_count, memoryGiB: order.vultr_ram / 1024, diskGiB: order.vultr_disk * 1e9 / 2 ** 30 };
       await save(state);
       if (["destroyed", "terminated"].includes(order.status)) result = { status: "terminated" };
@@ -363,8 +369,8 @@ export async function prepareAccess(state, options = {}) {
       order: order.id,
       status: order.status || null,
       ip: usableIP(order.ip_address) ? order.ip_address : null,
-      machine: order.vultr_plan || null,
-      serverStatus: order.vultr_server_status || null,
+      machine: state.body?.provider === "digitalocean" ? null : order.vultr_plan || null,
+      serverStatus: state.body?.provider === "digitalocean" ? null : order.vultr_server_status || null,
       resizePending: Boolean(order.metadata?.resize_pending),
     };
     if (usableIP(order.ip_address)) {

@@ -88,6 +88,7 @@ export async function report(name, id, options = {}) {
     if (item.phase !== "collected") continue;
     const actual = await fingerprint(item.local);
     if (actual.sha256 !== item.sha256 || actual.bytes !== item.bytes) throw new Error("Collected evidence changed before reporting.");
+    // Preserve the format of artifacts collected by older development builds.
     const path = `evidence-${evidence.length}${item.encryption ? ".age" : ""}`;
     await copyFile(item.local, join(destination, path));
     await chmod(join(destination, path), 0o600);

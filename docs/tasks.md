@@ -40,11 +40,6 @@ Optional `checks` run before the workload and use named argv checks with scope
 `tools` and result `exit` or `json`. JSON checks return `{"ready":true}` on success.
 An omitted check means no application readiness assertion was requested.
 
-Optional `secret` entries reference local files (`"token=api"`), exposed at
-`/workspace/.fission/secrets/api` through SSH. `"encrypt-to": "age1…"` encrypts
-collected artifacts and logs with your public recipient. See [privacy](privacy.md)
-for the local age dependency, key custody and limits.
-
 An optional embedded `recipe` supplies `name`, `prepare` argv arrays and `artifacts`,
 plus optional `afterCheckout`, `readiness` or named `checks`. Recipe preparation
 runs before inputs arrive. Most workflows only need `preparation` and `command`.
@@ -63,10 +58,10 @@ long operations; the budget never grows automatically.
 Results include command exit status, logs, requested artifacts, spending and
 cleanup status. Each new report also has a minimal `summary.json` for sharing
 outcome, duration, spending and cleanup without the detailed record. `status`
-returns its path. Review only that file before sharing; the surrounding directory
-contains private workflow details. See [privacy](privacy.md). A successful exit
-does not independently prove application correctness. Failed setup or work still triggers cleanup. Unknown deletion is
-never confirmed destruction. See [rental recovery](rental.md).
+returns its path. Review it before sharing; the surrounding directory contains
+commands, logs and artifacts. A successful exit does not independently prove
+application correctness. Failed setup or work still triggers cleanup. Unknown
+deletion is never confirmed destruction. See [rental recovery](rental.md).
 
 ## Older task files
 

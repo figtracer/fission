@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { root, readJSON, writeJSON } from "./state.mjs";
-import { catalog, machineCapabilities } from "./compute.mjs";
+import { catalog, machineCapabilities, quotePublicKey } from "./compute.mjs";
 import { vmCeiling, units } from "./budget.mjs";
 import { quote, providerWarning } from "./provider.mjs";
 
@@ -19,8 +19,8 @@ export async function availableMachines({ cached = false } = {}) {
   const seen = new Set(), machines = [];
   for (const machine of saved.machines) {
     if (!machine || typeof machine !== "object") continue;
-    if (machine.provider !== "vultr" || typeof machine.id !== "string" || seen.has(machine.id) ||
-        !/^[a-z0-9-]+$/.test(machine.id) || !Array.isArray(machine.locations) ||
+    if (!["vultr", "digitalocean"].includes(machine.provider) || typeof machine.id !== "string" || seen.has(machine.id) ||
+        !/^(?:do:)?[a-z0-9-]+$/.test(machine.id) || !Array.isArray(machine.locations) ||
         !Number.isFinite(machine.our_daily) || machine.our_daily <= 0) continue;
     let capacity;
     try { capacity = machineCapabilities(machine); } catch { continue; }
@@ -43,6 +43,8 @@ export async function quoteMachine(input) {
   const current = await availableMachines();
   const machine = current.machines.find(machine => machine.id === id && machine.regions.includes(region));
   if (!machine) throw new Error("Machine or region is no longer listed. Reload Available.");
-  const offer = await quote("create", { plan: id, provider: "vultr", region, os_id: 2284, prepaid_hours: 24, label: "fission-quote" }, "compute-mpp");
+  const offer = await quote("create", { plan: id, provider: machine.operator, region,
+    os_id: machine.operator === "digitalocean" ? "ubuntu-24-04-x64" : 2284, prepaid_hours: 24, label: "fission-quote",
+    ...(machine.operator === "digitalocean" ? { ssh_public_key: quotePublicKey } : {}) }, "compute-mpp");
   return `${id} / ${region}: ${offer.amount} USDC.e for 24h / quoted ${new Date().toISOString()}${current.ceiling !== "unset" && units(offer.amount) > units(current.ceiling) ? " / above VM cap" : ""}`;
 }

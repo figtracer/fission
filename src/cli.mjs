@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-import { list, load, locked } from "./state.mjs";
+import { list, load, locked, assertControllerHost } from "./state.mjs";
 import { execute, providerWarning } from "./provider.mjs";
 import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair } from "./workspace.mjs";
 
@@ -61,13 +61,14 @@ function table(states) {
 }
 
 async function main() {
+  await assertControllerHost();
   const raw = process.argv.slice(2);
   const separator = raw.indexOf("--");
   const tail = separator < 0 ? [] : raw.slice(separator + 1);
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" }, tmux: { type: "boolean" },
     "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
-    input: { type: "string", multiple: true }, secret: { type: "string", multiple: true }, "encrypt-to": { type: "string" }, artifact: { type: "string", multiple: true },
+    input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     "no-resize": { type: "boolean" },
@@ -93,10 +94,10 @@ async function main() {
   if (!positionals.length) positionals.push("ui");
   const [command, name, first, second] = positionals;
   if (command === "ui" && values.json) throw new Error("Use fission status --json for task data.");
-  if (!advanced && !["ui", "run", "rent", "ssh", "status", "stop", "help", "budget", "campaign", "install"].includes(command))
+  if (!advanced && !["ui", "run", "rent", "ssh", "status", "stop", "help", "budget", "campaign", "install", "controller"].includes(command))
     throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
-    install: ["output"], skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
+    controller: [], install: ["output"], skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
     plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
     open: ["plan", "approve"], stop: [], supervise: [],
     prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
@@ -110,13 +111,22 @@ async function main() {
   }
   for (const option of Object.keys(values))
     if (option !== "json" && !(allowed[command] || []).includes(option)) throw new Error(`--${option} is not supported by ${command}; no request submitted.`);
-  const arity = { install: 1, skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
+  const arity = { controller: name ? 2 : 1, install: 1, skill: 2, guide: name ? 2 : 1, report: first ? 3 : 2, capabilities: name ? 2 : 1, ui: 1, tmux: 1, ssh: 2, spending: 1, machines: 1, budget: 1, plan: 2, open: 2, prepare: 2, repair: 2, recipes: 1, list: 1, status: 2, watch: 1, dataset: name === "inspect" ? 3 : 4, storage: 1, cache: name === "list" ? 2 : name === "restore" ? 4 : 3, check: 2, jobs: 2, run: 3, campaign: 3, job: 3, wait: 3, exec: 2, upload: 4, download: 4, close: 2, reconcile: 2 };
   arity.stop = 2; arity.supervise = 2;
   if (!advanced) { arity.run = 2; arity.rent = 2; arity.status = name ? 2 : 1; }
   if (arity[command] && positionals.length !== arity[command]) throw new Error(`Wrong arguments for ${command}; run fission help ${command}.`);
   if (tail.length && !["exec", "run"].includes(command)) throw new Error("Only exec and run accept a command after --.");
   const emit = (value) => console.log(JSON.stringify(value, null, 2));
   switch (command) {
+    case "controller": {
+      if (!name) { console.log(await help(["controller"])); break; }
+      const controller = await import("./controller.mjs");
+      if (name === "run") await controller.runController();
+      else if (name === "install") emit(await controller.installController());
+      else if (name === "status") emit(await controller.controllerStatus());
+      else throw new Error("Use fission controller install, run or status.");
+      break;
+    }
     case "supervise": await supervise(name); break;
     case "stop": emit(await codeStatus(name) || await stopTask(name)); break;
     case "help": console.log(await help(positionals.slice(1))); break;

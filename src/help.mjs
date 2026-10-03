@@ -15,8 +15,6 @@ Options:
   --machine ID                    Select an exact catalog machine
   --no-resize                     Direct provisioning (required above 4 CPU/8 GiB)
   --input FILE[=/workspace/PATH]   Upload a file; repeatable
-  --secret FILE[=NAME]             SSH file at /workspace/.fission/secrets/NAME
-  --encrypt-to AGE_RECIPIENT       Encrypt collected files and logs with local age
   --artifact /workspace/PATH      Retrieve an output file; repeatable
   --cwd DIR                       Guest working directory (default /workspace)
   --repo URL --ref SHA            Optional public GitHub checkout at a full commit
@@ -32,13 +30,6 @@ Optional preparation contains argv arrays run after inputs arrive. Optional chec
 contain {name, scope: "tools", argv, result: "exit"|"json"}; JSON checks must emit
 {"ready":true}. No application checks are required or inferred. Setup failures
 stop the run. Use scripts or source archives for any repository or toolchain.
-
-Secrets are file references, read once when sent; values stay out of command
-arguments and transfer records. Workloads can still disclose them in output.
-Encrypted exports need age locally and a native age1 public recipient; the
-private identity is never needed by Fission. Metadata and observations remain
-local plaintext. Files remain plaintext on the VM; its host is trusted with
-execution. See docs/privacy.md for recovery and decryption.
 
 For multiple machines, replace task with machines: [{name, ...task}, ...]. Each
 has its own budget and lifetime; --budget bounds the combined allocation.
@@ -135,6 +126,7 @@ Usage: fission                     Open the Rust task dashboard
        fission status [NAME]       Progress, outcome, cost, evidence, cleanup
        fission stop NAME           Cancel work and request confirmed cleanup
        fission budget              Retained authorization (never reset history)
+       fission controller          Keep tasks supervised on a Linux host
        fission campaign expand     Expand a local seeded worker manifest
        fission help COMMAND        Focused syntax; COMMAND --help also works
 
@@ -146,6 +138,20 @@ Durations: s/m/h/d, at least 60s; provider availability and authorization bound 
 Memory/disk: GiB. Money: USDC.e.
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
+  if (key === "controller") return `Keep supervision running on an always-on Linux host.
+
+Usage: fission controller install  Install and start a systemd user service
+       fission controller run      Run in the foreground
+       fission controller status   Show owner and tasks needing attention
+
+Install Fission on the host, enable user lingering with loginctl, then install
+this service. Run the usual Fission commands and dashboard there over SSH.
+Existing tasks resume after restart; ambiguous creation/deletion needs explicit
+status NAME --resume. The controller never purchases on its own.
+Keep one state directory on one host. Do not copy live state or restore a stale
+backup. Inputs, records and wallet access belong to that host.
+A sleeping laptop is not an always-on host.
+See docs/controller.md for setup, operation and recovery.`;
   if (key === "code") return `Run a short source file through Judge0 using MPP.
 
 Usage: fission run NAME --from FILE --budget AMOUNT [--approve]

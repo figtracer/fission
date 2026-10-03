@@ -42,6 +42,13 @@ configurable; measured timings from another task are not guarantees. Large direc
 machines may require one prepaid day even for short work. Do not silently extend
 a budget or deadline. There is no automatic replacement after ambiguous creation.
 
+## Always-on work
+
+For work that must continue while the laptop sleeps, use a Linux controller host.
+Read `fission help controller` and the [controller guide](https://github.com/figtracer/fission/blob/main/docs/controller.md).
+Run the same rental and workflow commands there over SSH, with inputs on that
+host. Keep its Fission state in place; copying live state is not migration.
+
 ## Observe and finish
 
 ```sh
@@ -63,12 +70,5 @@ instructions. For rentals, return SSH access and deadline without inventing work
 
 For a shareable result, use the report's `summary.json` path returned by status.
 It contains outcome, duration, spending and cleanup; review it before sharing.
-Detailed reports, logs, artifacts and experiment records retain private workflow
-content. Use `--secret FILE=NAME` for credential files instead of embedding values
-in argv; the guest reads `/workspace/.fission/secrets/NAME`. Workload output can
-still disclose values. For encrypted exports, use `--encrypt-to` with the user's
-public age recipient; validate local age first, never request their private key,
-and never downgrade to plaintext after an error. Encryption happens on the
-controller after SSH; guest files remain plaintext. Do not describe this as
-private execution. Upload only selected inputs. Ordinary machines and execution
-APIs are trusted with the workload; see [privacy](https://github.com/figtracer/fission/blob/main/docs/privacy.md).
+Detailed reports retain commands, logs, artifacts and payment records. Upload
+only selected inputs and review results before sharing.

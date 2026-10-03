@@ -4,7 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { recipe, duration, start, sourceRecipes } from "./workspace.mjs";
 import { quote, money, runProcess, paymentTerms, providerWarning } from "./provider.mjs";
-import { catalog, machineCapabilities } from "./compute.mjs";
+import { catalog, machineCapabilities, quotePublicKey } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
 export const providers = [{
@@ -19,19 +19,15 @@ export const providers = [{
   reason: "October 2, 2026: signup and billing reads verified. Persistent ARM64 containers with monthly credit billing; managed deletion, credit reconciliation and deadline enforcement remain unqualified.",
   evidence: "https://buildwithlocus.com/billing.md",
 }, {
-  id: "digitalocean", available: false, gateway: "Same compute gateway", operator: "DigitalOcean",
-  reason: "October 2, 2026: 42 live vps catalog plans observed. Provider-specific OS selection, SSH provisioning and deletion need qualification before managed purchase; existing Vultr presets must not be reused.",
-  evidence: "https://studio.x402layer.cc/docs/agentic-access/x402-compute",
-}, {
   id: "modal-tempo", available: true, gateway: "Tempo", operator: "Modal",
   price: "Dynamic creation + $0.0001 per lifecycle call", payment: "MPP tempo.charge",
   capabilities: { os: "linux", kind: "sandbox", architecture: null, cpu: null, memoryGiB: null, diskGiB: null, p2p: false, customImage: false, expiry: true },
   evidence: "https://modal.mpp.tempo.xyz",
   limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
 }, {
-  id: "compute-mpp", available: true, gateway: "x402layer", operator: "Vultr",
+  id: "compute-mpp", available: true, gateway: "x402layer", operator: "Vultr / DigitalOcean",
   price: "Live per-plan VM prices; quote before purchase",
-  limitations: "Vultr Linux x86_64 VMs selected from the live catalog. Shorter target leases use a prepaid starter upgrade with capacity and time gates. Catalog capacity and P2P require guest verification; node readiness is a separate workload. Early deletion does not imply a refund.",
+  limitations: "Vultr and DigitalOcean Linux x86_64 VMs through one gateway. Qualified Vultr plans can use a prepaid starter upgrade; DigitalOcean prepays whole days. Capacity is verified on the guest. Early deletion does not imply a refund.",
   payment: "MPP tempo.charge",
 }, {
   id: "smol-orthogonal", available: false, gateway: "Orthogonal", operator: "Smol",
@@ -157,7 +153,7 @@ const catalogPrice = (machine) => {
 };
 
 function rentalFor(machine, machines, seconds, region, noResize = false) {
-  if (seconds >= 86400 || noResize) {
+  if (seconds >= 86400 || noResize || machine.provider === "digitalocean") {
     const days = Math.ceil(seconds / 86400);
     return { estimate: catalogPrice(machine) * BigInt(days), prepaidHours: days * 24 };
   }
@@ -203,7 +199,7 @@ export async function machineOffers(options, machines) {
   const candidates = [], seen = new Set();
   let compatible = 0, omitted = 0, unsupportedLease = 0, resizePolicy = 0;
   for (const machine of machines) {
-    if (machine.provider !== "vultr" || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
+    if (!["vultr", "digitalocean"].includes(machine.provider) || !Array.isArray(machine.locations) || !machine.locations.includes(options.region) || seen.has(machine.id)) continue;
     seen.add(machine.id);
     let capabilities;
     try { capabilities = machineCapabilities(machine); }
@@ -211,7 +207,7 @@ export async function machineOffers(options, machines) {
     if (Object.entries(requirements).some(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value))) continue;
     compatible++;
-    if (seconds < 86400 && !options["no-resize"] && resizePolicyReason(machine)) { resizePolicy++; continue; }
+    if (machine.provider === "vultr" && seconds < 86400 && !options["no-resize"] && resizePolicyReason(machine)) { resizePolicy++; continue; }
     let rental;
     try { rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]); }
     catch { compatible--; omitted++; continue; }
@@ -226,7 +222,9 @@ export async function machineOffers(options, machines) {
   for (const { machine, capabilities, estimate, lease, prepaidHours } of candidates.slice(0, shortlistSize)) {
     let offer, quoted;
     try {
-      offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, prepaid_hours: lease?.prepaidHours || prepaidHours, label: "fission-quote" }, "compute-mpp");
+      offer = await quote("create", { plan: lease?.starter.id || machine.id, provider: machine.provider, region: options.region,
+        os_id: machine.provider === "digitalocean" ? "ubuntu-24-04-x64" : 2284, prepaid_hours: lease?.prepaidHours || prepaidHours, label: "fission-quote",
+        ...(machine.provider === "digitalocean" ? { ssh_public_key: quotePublicKey } : {}) }, "compute-mpp");
       quoted = quotedLease(lease, offer.amount);
     }
     catch (error) { quoteErrors.push({ provider: "compute-mpp", machine: machine.id, reason: error.message }); continue; }
@@ -299,14 +297,14 @@ export async function createPlan(name, options, task) {
   let machine, capabilities, rental;
   if (provider === "compute-mpp") {
     machines ??= await catalog();
-    machine = machines.find((item) => item.id === options.machine && item.provider === "vultr");
-    if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a Vultr --machine and --region from the live compute catalog.");
+    machine = machines.find((item) => item.id === options.machine && ["vultr", "digitalocean"].includes(item.provider));
+    if (!machine || !machine.locations.includes(options.region)) throw new Error("Choose a supported --machine and --region from the live compute catalog.");
     capabilities = machineCapabilities(machine);
     const unmet = Object.entries(requirements).filter(([key, value]) => capabilities[key] == null ||
       (typeof value === "number" ? capabilities[key] < value : capabilities[key] !== value)).map(([key, value]) => `${key}=${value}`);
     if (unmet.length) return { status: "unavailable", requirements, unmet, machine: machine.id, paymentSubmitted: false };
     const seconds = duration(options.duration);
-    const policyReason = seconds < 86400 && !options["no-resize"] ? resizePolicyReason(machine) : null;
+    const policyReason = machine.provider === "vultr" && seconds < 86400 && !options["no-resize"] ? resizePolicyReason(machine) : null;
     if (policyReason) return { status: "unavailable", reason: policyReason, requirements, paymentSubmitted: false };
     rental = rentalFor(machine, machines, seconds, options.region, options["no-resize"]);
     if (!rental) return { status: "unavailable", reason: "No supported starter resize for this target duration and machine.", requirements, paymentSubmitted: false };
@@ -343,14 +341,16 @@ export async function createPlan(name, options, task) {
       const result = await runProcess("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "fission", "-f", key]);
       if (result.code !== 0) throw new Error("Could not create workspace SSH key.");
     }
-    body = { plan: rental.lease?.starter.id || machine.id, provider: "vultr", region: options.region, os_id: 2284, label: name,
+    body = { plan: rental.lease?.starter.id || machine.id, provider: machine.provider, region: options.region,
+      os_id: machine.provider === "digitalocean" ? "ubuntu-24-04-x64" : 2284, label: name,
       prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours, ssh_public_key: (await readFile(key + ".pub", "utf8")).trim() };
   }
   const candidates = [{ machine, capabilities, body, lease: rental?.lease }, ...alternatives.map((item) => {
-    const target = machines.find((entry) => entry.id === item.machine && entry.provider === "vultr");
+    const target = machines.find((entry) => entry.id === item.machine && ["vultr", "digitalocean"].includes(entry.provider));
     const rental = rentalFor(target, machines, timeout, options.region, options["no-resize"]);
     return { machine: target, capabilities: item.capabilities, lease: item.lease,
-      body: { ...body, plan: rental.lease?.starter.id || target.id, prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours } };
+      body: { ...body, provider: target.provider, os_id: target.provider === "digitalocean" ? "ubuntu-24-04-x64" : 2284,
+        plan: rental.lease?.starter.id || target.id, prepaid_hours: rental.lease?.prepaidHours || rental.prepaidHours } };
   })];
   let chosen, offer;
   const skipped = [];
@@ -387,6 +387,8 @@ export async function openPlan(name, id) {
   const { digest: expected, ...contents } = value;
   if (digest(contents) !== expected) throw new Error("Plan changed after creation. Generate a fresh plan.");
   value.provider = providerId(value.provider);
+  if (value.task?.encryptTo || value.task?.inputs?.some((input) => input.secret))
+    throw new Error("Saved plan uses removed private-transfer options. Generate a fresh plan; no payment submitted.");
   let machines;
   if (value.provider === "compute-mpp") {
     const cap = await vmCeiling(value.profile);
@@ -419,7 +421,11 @@ export async function openPlan(name, id) {
 }
 
 function validateCandidate(machines, candidate) {
-  const current = machines.find((item) => item.id === candidate.machine.id && item.provider === "vultr");
+  const operator = candidate.machine.provider || "vultr";
+  if (!["vultr", "digitalocean"].includes(operator) || candidate.body.provider !== operator ||
+      (operator === "digitalocean" && (candidate.lease || candidate.body.os_id !== "ubuntu-24-04-x64")))
+    throw new Error("Compute provider or image differs from the saved machine contract.");
+  const current = machines.find((item) => item.id === candidate.machine.id && item.provider === operator);
   if (!current || !current.locations.includes(candidate.body.region) || JSON.stringify(machineCapabilities(current)) !== JSON.stringify(candidate.capabilities))
     throw new Error("Compute plan capacity changed. Generate a fresh plan.");
   if (candidate.lease) {

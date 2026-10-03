@@ -25,38 +25,25 @@ def copy(source, size, target=None):
 
 def main():
     mode, path, *args = sys.argv[1:]
-    if mode in ['receive', 'receive-secret']:
-        destination, size, *expected = args
+    if mode == 'receive':
+        destination, size, expected = args
         staging = pathlib.Path(path)
-        if mode == 'receive-secret':
-            os.umask(0o077)
-            if any(parent.is_symlink() for parent in [staging.parent, *staging.parent.parents]):
-                raise ValueError('Secret directory must not have symlinked parents')
-        staging.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if mode == 'receive-secret':
-            os.chmod(staging.parent, 0o700)
+        staging.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'wb') as target:
             actual = copy(sys.stdin.buffer, int(size), target)
-            if mode == 'receive' and actual != expected[0]:
+            if actual != expected:
                 raise RuntimeError('Upload digest mismatch; staging retained')
             target.flush()
             os.fsync(target.fileno())
         os.link(staging, destination)
         staging.unlink()
-        print(json.dumps({'size': int(size), **({'sha256': actual} if mode == 'receive' else {})}))
+        print(json.dumps({'size': int(size), 'sha256': actual}))
         return
     if mode not in ['metadata', 'send']:
         raise ValueError('Use metadata, send or receive')
-    secret_root = pathlib.Path('/workspace/.fission/secrets')
-    resolved = pathlib.Path(path).resolve()
-    if secret_root.resolve() in [resolved, *resolved.parents]:
-        raise ValueError('Declared secret files cannot be exported')
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), 'rb') as source:
         info = os.fstat(source.fileno())
-        if secret_root.is_dir() and any((item.stat().st_dev, item.stat().st_ino) == (info.st_dev, info.st_ino)
-                                        for item in secret_root.iterdir() if item.is_file()):
-            raise ValueError('Declared secret files cannot be exported through hard links')
         if not stat.S_ISREG(info.st_mode):
             raise RuntimeError('Transfer requires a regular file')
         if mode == 'metadata':

@@ -3,7 +3,7 @@ import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, processAlive, OperationLocked } from "./state.mjs";
+import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, ownerAlive, controllerRunning, OperationLocked } from "./state.mjs";
 import { createPlan, openPlan } from "./plans.mjs";
 import { taskSpec, taskFileOptions } from "./task-spec.mjs";
 import { budget, units, amount } from "./budget.mjs";
@@ -79,6 +79,9 @@ async function experimentStatus(name) {
 
 async function planTask(name, options, command, experiment) {
   directory(name);
+  if (await readJSON(join(root, ".controller.json"))) {
+    if (!await controllerRunning()) throw new Error("Controller is stopped. Start it before planning or purchasing.");
+  }
   if (await readJSON(join(directory(name), "state.json"))) throw new Error("Task name already recorded. Use status NAME --resume; run never repeats a purchase.");
   if ((await reservations()).has(name)) throw new Error("Name is reserved by a recorded experiment; choose another task or experiment name.");
   const { definition, disk, task } = await taskSpec(options, command);
@@ -91,8 +94,6 @@ async function planTask(name, options, command, experiment) {
     region: options.region, machine: options.machine, provider: options.machine ? "compute-mpp" : undefined,
     cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
     "no-resize": options["no-resize"] }, task);
-  if (plan.status !== "unavailable" && (task.inputs.some((input) => input.secret) || task.encryptTo) && plan.provider !== "compute-mpp")
-    throw new Error("Private file transfer requires an SSH machine. No payment submitted.");
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode,
     ...(task.chain ? { chain: task.chain } : {}),
@@ -104,8 +105,7 @@ async function planTask(name, options, command, experiment) {
         afterCheckoutCommands: definition.afterCheckout?.length || 0 },
       declaredRecipe: options.recipe || null, source: plan.source || null,
       preparation: task.preparation, scope: task.scope, checks: task.probes,
-      inputs: task.inputs.map(({ remote, bytes, sha256, secret }) => ({ remote, bytes, sha256, ...(secret ? { secret: true } : {}) })),
-      ...(task.encryptTo ? { encryptTo: task.encryptTo } : {}),
+      inputs: task.inputs.map(({ remote, bytes, sha256 }) => ({ remote, bytes, sha256 })),
       command: task.command, cwd: task.cwd, artifacts: [...definition.artifacts, ...task.artifacts],
     },
     fallback: plan.selection ? { strategy: "cheapest", baseline: plan.selection.baseline, creationCap: plan.creationCap,
@@ -169,14 +169,12 @@ async function createFromFile(name, options) {
     const { name: role, command = rental ? [] : undefined, ...settings } = entry;
     if (rental) settings.kind = "rental";
     for (const field of ["patch", "manifest", "snapshot-plan", "output"]) if (settings[field]) settings[field] = resolve(dirname(file), settings[field]);
-    for (const field of ["input", "secret"]) {
-      if (settings[field] !== undefined && (!Array.isArray(settings[field]) || settings[field].some((item) => typeof item !== "string")))
-        throw new Error(`${field} must be an array of file mappings.`);
-      if (settings[field]) settings[field] = settings[field].map((mapping) => {
-        const i = mapping.indexOf("=");
-        return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
-      });
-    }
+    if (settings.input !== undefined && (!Array.isArray(settings.input) || settings.input.some((item) => typeof item !== "string")))
+      throw new Error("input must be an array of file mappings.");
+    if (settings.input) settings.input = settings.input.map((mapping) => {
+      const i = mapping.indexOf("=");
+      return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
+    });
     await taskSpec(settings, command); // Validate every role before the first quote.
     machines.push({ name: child, role, settings, command });
   }
@@ -247,7 +245,7 @@ export async function taskStatus(name, expectedExperiment) {
     ...(task.kind === "rental" ? { ready, readyAt: task.readyAt || null, ssh: ready ? `fission ssh ${name}` : null,
       usableUntil: new Date(usableUntil).toISOString(),
       closeReason: task.closeReason || null, accessError: task.accessError || null } : {}),
-    supervisor: { pid: owner?.pid || null, alive: Boolean(owner && processAlive(owner.pid)), lastObservedAt: task.observedAt || null },
+    supervisor: { pid: owner?.pid || null, alive: Boolean(owner && await ownerAlive(owner)), lastObservedAt: task.observedAt || null },
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
     accessObservations: state.accessObservations || [], initialization: state.initialization || null,
     resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
@@ -257,10 +255,10 @@ export async function taskStatus(name, expectedExperiment) {
     report: task.report?.report || null, summary: task.report?.summary || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
-export async function resumeTask(name) {
+export async function resumeTask(name, { controller = false } = {}) {
   if (!await readJSON(join(directory(name), "state.json"))) {
     const status = await taskStatus(name);
-    return Promise.all(status.machines.filter((item) => item.phase !== "not_purchased").map((item) => resumeTask(item.name)));
+    return Promise.all(status.machines.filter((item) => item.phase !== "not_purchased").map((item) => resumeTask(item.name, { controller })));
   }
   const state = await load(name);
   if (!state.task) throw new Error("This is a retained low-level workspace, not a managed task. Use advanced reconcile.");
@@ -268,6 +266,10 @@ export async function resumeTask(name) {
   for (const path of [ownerPath(name), join(directory(name), "operation.lock"), join(root, ".budget.lock")]) await recoverLock(path);
   const owner = await readJSON(ownerPath(name));
   if (owner) return { name, supervisor: owner.pid, note: "Existing owner retained; no duplicate supervisor started." };
+  if (!controller && await readJSON(join(root, ".controller.json"))) {
+    await update(name, (task) => { task.controllerResumeRequestedAt = new Date().toISOString(); });
+    return { name, note: "Resume requested. The controller service owns supervision; use fission controller status." };
+  }
   const log = await open(join(directory(name), "supervisor.log"), "a", 0o600);
   try {
     const child = spawn(process.execPath, [fileURLToPath(new URL("./cli.mjs", import.meta.url)), "advanced", "supervise", name], {
@@ -355,10 +357,10 @@ async function finish(name, jobs) {
       });
       break;
     }
-    const local = join(destination, `${state.task.exports.length}-${basename(remote)}${state.task.encryptTo ? ".age" : ""}`);
+    const local = join(destination, `${state.task.exports.length}-${basename(remote)}`);
     state = await update(name, (task) => { task.exports.push({ remote, local, phase: "collecting" }); });
     try {
-      const result = await locked(name, async () => download(await active(name, false), remote, local, { ...transfer, encryptTo: state.task.encryptTo }));
+      const result = await locked(name, async () => download(await active(name, false), remote, local, transfer));
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), result, { phase: "collected" }); });
     } catch (error) {
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), { phase: "partial", error: error.message }); });
@@ -403,6 +405,8 @@ async function finish(name, jobs) {
 
 export async function supervise(name) {
   return fileLocked(ownerPath(name), async () => {
+    if (await readJSON(join(root, ".controller.json")))
+      await update(name, (task) => { task.controllerResumeHandledAt = task.controllerResumeRequestedAt; });
     while (true) {
       let state = await load(name);
       if (!state.task || state.provider !== "compute-mpp") throw new Error("Managed compute VM task required; paid sandbox polling is not supported.");
@@ -510,22 +514,8 @@ export async function supervise(name) {
             const input = task.inputs.find((item) => !item.uploadedAt && !item.cacheSkippedAt);
             try {
               if (input.secret) {
-                // Resolve a reference once at dispatch. Never journal its contents
-                // or a dictionary-testable digest, and never replay an ambiguous send.
-                if (input.attemptedAt) {
-                  task.outcome = "preparation_failed";
-                  task.lastError = "Secret transfer unresolved; no repeated transfer.";
-                  return;
-                }
-                input.attemptedAt = new Date().toISOString();
-                await save(state);
-                try {
-                  await upload(state, input.local, input.remote, { ...transfer, secret: true });
-                  input.uploadedAt = new Date().toISOString();
-                } catch {
-                  task.outcome = "preparation_failed";
-                  task.lastError = "Secret transfer failed or is unresolved; no repeated transfer.";
-                }
+                task.outcome = "preparation_failed";
+                task.lastError = "Recorded secret inputs are no longer supported; no file was read or sent.";
                 return;
               }
               const actual = await fingerprint(input.local);

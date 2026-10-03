@@ -11,6 +11,7 @@ Normal interface:
 - `fission status [NAME] [--resume] [--wait DURATION]`
 - `fission stop NAME`
 - `fission budget`
+- `fission controller` — supervise tasks on an always-on Linux host
 - `fission help COMMAND`
 
 Everything manual or low-level is `fission advanced COMMAND`.
@@ -20,6 +21,7 @@ Documentation:
 - [Tasks](docs/tasks.md)
 - [Rental safety and recovery](docs/rental.md)
 - [Installation](docs/install.md)
+- [Always-on controller](docs/controller.md)
 - [Agent skill](skills/fission/SKILL.md)
 
 Preview before approval. Preserve retained accounting and ambiguous outcomes. A local sleep pauses supervision but not remote deadlines. Cleanup is complete only when provider termination is confirmed.

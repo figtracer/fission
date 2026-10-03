@@ -1,11 +1,10 @@
-import { stat, lstat } from "node:fs/promises";
-import { resolve, isAbsolute, basename } from "node:path";
+import { stat } from "node:fs/promises";
+import { resolve, isAbsolute } from "node:path";
 import { recipe, duration, validateRecipe } from "./workspace.mjs";
-import { validateRecipient } from "./encryption.mjs";
 import { fingerprint } from "./experiments.mjs";
 
 // The same generic contract serves CLI commands, task files and machine groups.
-export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "secret", "encrypt-to", "artifact", "output"];
+export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "artifact", "output"];
 export const taskFileOptions = [...taskOptions, "recipe", "preparation", "checks", "context", "kind"];
 
 export async function taskSpec(options, command) {
@@ -52,26 +51,12 @@ export async function taskSpec(options, command) {
     const remote = separator < 0 ? "/workspace/" + local.split("/").at(-1) : mapping.slice(separator + 1);
     if (!(await stat(local)).isFile() || !isAbsolute(remote) || remote.includes("\0") || /[\r\n]/.test(remote) || !remote.startsWith("/workspace/"))
       throw new Error("--input accepts a regular local file[=/workspace/path]. Use an explicit source archive or patch, not an implicit directory upload.");
-    if (resolve(remote) === "/workspace/.fission/secrets" || resolve(remote).startsWith("/workspace/.fission/secrets/")) throw new Error("Use --secret for the reserved secret directory.");
     inputs.push({ local, remote, ...await fingerprint(local) });
   }
-  if (options.secret !== undefined && (!Array.isArray(options.secret) || options.secret.some((item) => typeof item !== "string")))
-    throw new Error("secret must be an array of FILE[=NAME] references, never inline values.");
-  for (const mapping of options.secret || []) {
-    const separator = mapping.indexOf("=");
-    const local = resolve(separator < 0 ? mapping : mapping.slice(0, separator));
-    const name = separator < 0 ? basename(local) : mapping.slice(separator + 1);
-    if (!/^[A-Za-z0-9_.-]+$/.test(name) || [".", ".."].includes(name) || !(await lstat(local)).isFile())
-      throw new Error("--secret requires a regular local file and a simple name; symlinks are not accepted.");
-    inputs.push({ local, remote: `/workspace/.fission/secrets/${name}`, secret: true });
-  }
-  if (options["encrypt-to"] !== undefined) await validateRecipient(options["encrypt-to"]);
   if (new Set(inputs.map((input) => input.remote)).size !== inputs.length) throw new Error("Input destinations must be unique.");
   const artifacts = options.artifact || [];
   if (!Array.isArray(artifacts) || artifacts.some((path) => typeof path !== "string")) throw new Error("artifact must be an array of paths.");
   if (artifacts.some((path) => !path.startsWith("/workspace/") || /[\0\r\n]/.test(path))) throw new Error("--artifact must name a regular /workspace/file; databases stay remote.");
-  if (artifacts.some((path) => resolve(path) === "/workspace/.fission/secrets" || resolve(path).startsWith("/workspace/.fission/secrets/")))
-    throw new Error("Declared secret files cannot be selected as artifacts.");
   const cwd = options.cwd || (options.repo ? "/workspace/source" : "/workspace");
   if (!isAbsolute(cwd) || cwd.includes("\0")) throw new Error("--cwd must be an absolute guest directory.");
   const checks = [...(definition.checks || []), ...(definition.readiness || []).map((argv, i) => ({ name: `check-${i + 1}`, scope: "tools", argv, result: "exit" }))];
@@ -79,6 +64,6 @@ export async function taskSpec(options, command) {
   checks.push(...(options.checks || []));
   const resolved = validateRecipe({ name: "checks", prepare: [], artifacts: [], checks });
   return { definition, disk: options.disk, task: { schemaVersion: 2, ...(rental ? { kind: "rental" } : {}),
-    command, cwd, inputs, preparation, artifacts, ...(options["encrypt-to"] ? { encryptTo: options["encrypt-to"] } : {}), scope: "tools", probes: resolved.checks,
+    command, cwd, inputs, preparation, artifacts, scope: "tools", probes: resolved.checks,
     timing, output: resolve(options.output || "fission"), context: options.context || "User-supplied Linux workflow." } };
 }
