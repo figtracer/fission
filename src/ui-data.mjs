@@ -24,7 +24,7 @@ async function main() {
   const [action, name] = process.argv.slice(2);
   let message = "";
   let available = action === "snapshot" ? await availableMachines({ cached: true }) : undefined;
-  const code = name ? await codeStatus(name) : null;
+  const code = name && ["close", "resume", "refresh"].includes(action) ? await codeStatus(name) : null;
   if (code && ["close", "resume", "refresh"].includes(action)) {
     message = `${name}: ${code.phase}. ${code.note}`;
   } else if (action === "close") {
