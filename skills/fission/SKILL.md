@@ -66,7 +66,9 @@ It contains outcome, duration, spending and cleanup; review it before sharing.
 Detailed reports, logs, artifacts and experiment records retain private workflow
 content. Use `--secret FILE=NAME` for credential files instead of embedding values
 in argv; the guest reads `/workspace/.fission/secrets/NAME`. Workload output can
-still disclose values. For encrypted artifacts, use `--encrypt-to` with the user's
+still disclose values. For encrypted exports, use `--encrypt-to` with the user's
 public age recipient; validate local age first, never request their private key,
-and never downgrade to plaintext after an error. Upload only selected inputs. Ordinary machines and execution
+and never downgrade to plaintext after an error. Encryption happens on the
+controller after SSH; guest files remain plaintext. Do not describe this as
+private execution. Upload only selected inputs. Ordinary machines and execution
 APIs are trusted with the workload; see [privacy](https://github.com/figtracer/fission/blob/main/docs/privacy.md).

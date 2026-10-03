@@ -1,9 +1,23 @@
 # Privacy
 
-Fission keeps orchestration, wallet access and records on your computer. Running
-on a rented machine still entrusts the workload to its host. An execution API also
-receives commands and transferred content; SSH encrypts transport, not the guest's
-memory against its operator. No-signup rental does not make payments anonymous.
+Fission protects transfers and can encrypt exported files. Ordinary VM providers
+are still trusted with your running workload. There is no blanket private mode.
+
+| Protection | What it covers | What it does not cover |
+|---|---|---|
+| SSH | Commands and files in transit to the VM | The host can inspect the guest |
+| `--secret` | Keeps credential contents out of plans and transfer records | The guest receives plaintext; commands can disclose it |
+| `--encrypt-to` | Collected files and logs saved as ciphertext on the controller | Guest files, commands and local metadata remain plaintext |
+| Owner-only files | Access by other ordinary Unix users | Root, the same user and the VM host |
+| Confirmed cleanup | Provider reports the machine deleted | Backup erasure or untraceable activity |
+
+Encryption currently happens on the controller **after SSH transfer**, not on the
+VM. Your decryption key stays with you. Payments and rental metadata remain
+observable; no-signup rental does not make them anonymous.
+
+The controller is the computer running Fission. By default it is your computer;
+running it on a cloud host puts wallet access, commands, secret inputs and records
+on that host instead. That host becomes another party you trust.
 
 ## What leaves your computer
 
@@ -72,7 +86,7 @@ output, command arguments or observations. Ordinary input files keep their
 existing fingerprinted transfer behavior. Secret transfer requires SSH, and never
 falls back to an API request containing the secret.
 
-## Encrypted collection
+## Encrypted exports
 
 Install [age](https://github.com/FiloSottile/age) locally when you need encrypted
 exports. Generate and keep your identity yourself:

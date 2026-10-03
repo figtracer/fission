@@ -1,7 +1,15 @@
 # Choosing compute
 
-Use a Linux machine for repository builds, your own software, SSH, or
-long-running work. Use Judge0 for a short, self-contained source file.
+Use a Linux VPS for repository builds, SSH or long-running work. You get a
+machine with its own resources and a rental deadline. A sandbox runs commands
+inside a managed environment; a short code job returns a result without leaving
+a machine to connect to. Use Judge0 for a short, self-contained source file.
+
+The payment gateway sells access; the infrastructure operator runs the machine.
+For example, the compute gateway provisions VMs on Vultr. SSH goes directly to
+the guest, while provisioning and deletion go through the gateway. Both parties
+see rental metadata, and the operator remains trusted with execution. See
+[data and privacy](privacy.md).
 
 ## Short code jobs
 
@@ -60,3 +68,15 @@ or treat workspace credit as a per-task spending limit.
 DigitalOcean plans are exposed by the same compute gateway as Vultr; another
 operator does not provide independent gateway failover. Catalog listings alone
 do not establish that an SSH machine can be provisioned and cleaned up.
+
+## Candidates under review
+
+Checked October 3, 2026; these are discovery results, not qualified integrations.
+
+- [AgentVM](https://mpp.agentvm.sh/compute/sessions) advertises Tempo MPP sessions
+  on Hetzner, up to 4 vCPU, 16 GB RAM and 160 GB disk, for up to six hours. Its
+  discovery endpoint responded, but purchase, access and cleanup still need validation.
+- [OpenVPS](https://github.com/kartojal/openvps) advertises Tempo MPP and SSH into
+  Firecracker VMs. Its live endpoints were unreachable during this check.
+
+Neither listing establishes protection from the VM host through attestation.

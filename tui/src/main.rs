@@ -722,7 +722,10 @@ fn render(
                         format!("Gateways   {} available routes", data.gateways.len()),
                         1,
                     ));
-                    lines.push(("Gateway routes payments; operator runs compute.".into(), 2));
+                    lines.push((
+                        "Gateway takes payment; operator runs the machine.".into(),
+                        2,
+                    ));
                     lines.push((String::new(), 0));
                     let nw = width.saturating_sub(19);
                     lines.push((format!("  {:<nw$} operator", "route"), 2));
@@ -776,10 +779,10 @@ fn render(
                             0,
                         ));
                         lines.push((String::new(), 0));
-                        lines.push(("Enter requests a fresh 24-hour quote.".into(), 2));
+                        lines.push(("Enter gets a 24-hour quote. No purchase.".into(), 2));
                     }
                 } else {
-                    lines.push((format!("VM offers   {} options", available.len()), 1));
+                    lines.push((format!("Linux VMs   {} options", available.len()), 1));
                     lines.push((
                         format!(
                             "{}   VM budget: {} USDC.e",

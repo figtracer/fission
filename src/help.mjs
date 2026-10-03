@@ -35,9 +35,10 @@ stop the run. Use scripts or source archives for any repository or toolchain.
 
 Secrets are file references, read once when sent; values stay out of command
 arguments and transfer records. Workloads can still disclose them in output.
-Encrypted collection needs age locally and a native age1 public recipient; the
+Encrypted exports need age locally and a native age1 public recipient; the
 private identity is never needed by Fission. Metadata and observations remain
-local plaintext. See docs/privacy.md for recovery and decryption.
+local plaintext. Files remain plaintext on the VM; its host is trusted with
+execution. See docs/privacy.md for recovery and decryption.
 
 For multiple machines, replace task with machines: [{name, ...task}, ...]. Each
 has its own budget and lifetime; --budget bounds the combined allocation.

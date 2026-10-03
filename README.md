@@ -1,14 +1,18 @@
 # Fission
 
-Rent machines and run tasks with your coding agent.
+Rent Linux machines with your coding agent.
 
-Ask for a machine, or give your agent a workflow and a budget. Fission handles
-quotes, access, execution and cleanup. You choose the software and commands.
-Use SSH yourself or run tasks across multiple machines. Payments
-use MPP on Tempo. Short source-file jobs can run through Judge0 without renting a VM.
+Give it a task and a budget. Fission gets quotes, runs your commands and cleans
+up when the work is done. SSH in yourself or coordinate work across machines.
+Payments use MPP on Tempo.
+
+[Install](docs/install.md) · [Agent skill](skills/fission/SKILL.md) ·
+[Docs](docs/tasks.md) · [Compute options](docs/compute.md)
+
+## Install
 
 Download the [package for your platform](https://github.com/figtracer/fission/releases/tag/v0.1.1)
-and verify its checksum ([installation guide](docs/install.md)). Requires Node.js 22.13+ and SSH.
+and verify its checksum. Requires Node.js 22.13+ and SSH.
 
 ```sh
 npm install -g ./fission-0.1.1-PLATFORM.tgz --ignore-scripts
@@ -16,16 +20,18 @@ fission install
 fission
 ```
 
-The package includes the Rust dashboard and agent skill. Configure your
+This installs the agent skill and opens the Rust dashboard. Set up your
 [Tempo wallet](https://docs.tempo.xyz/cli) before buying a machine.
 
-Tell your agent: **“Get me a Linux machine within this budget,”**
-**“Run this PR on Linux,”** or **“Run this Python check cheaply.”**
-Fission keeps results and spending locally. Rentals have a deadline;
-short code jobs finish without leaving a machine running.
+## Use it
 
-Use `fission help` to explore commands and `fission help code` for short jobs.
+“Get me a Linux machine within $2.”
 
-[Installation](docs/install.md) · [Agent skill](skills/fission/SKILL.md) ·
-[Compute options](docs/compute.md) · [Tasks](docs/tasks.md) ·
-[Budgets and recovery](docs/rental.md) · [Privacy](docs/privacy.md)
+“Run this PR on Linux and bring back the results.”
+
+You choose the software and commands. Fission tracks spending, results and
+cleanup. Short source-file jobs can use Judge0 without renting a machine.
+
+Run `fission help` for commands.
+
+[Budgets and recovery](docs/rental.md) · [Data and privacy](docs/privacy.md)
