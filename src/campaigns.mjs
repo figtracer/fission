@@ -2,7 +2,7 @@ import { mkdir, open, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { amount, units } from "./budget.mjs";
 import { digest } from "./experiments.mjs";
-import { taskOptions, taskSpec } from "./harnesses.mjs";
+import { taskFileOptions, taskSpec } from "./task-spec.mjs";
 
 const maximumSeed = (1n << 256n) - 1n;
 const maximumWorkers = 4096;
@@ -28,8 +28,9 @@ function resolveInput(value, base) {
 
 function resolveTemplate(template, base) {
   if (!template || typeof template !== "object" || Array.isArray(template)) campaignError("template must be an object.");
-  if (Object.keys(template).some((key) => !["command", ...taskOptions].includes(key)))
+  if (Object.keys(template).some((key) => !["command", ...taskFileOptions].includes(key)))
     campaignError("template contains an unsupported field.");
+  if (template.kind !== undefined && template.kind !== "run") campaignError("workers execute workloads; kind must be run.");
   if (!Array.isArray(template.command) || template.command.some((arg) => typeof arg !== "string"))
     campaignError("template command must be a string argv array.");
   const resolved = { ...template, output: resolve(base, template.output || "fission") };

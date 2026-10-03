@@ -48,7 +48,7 @@ export async function check(name, scope, seconds, maxHeadAge, options = {}) {
   if (seconds > 120) throw new Error("Readiness observations allow at most 2m; use a bounded job for preparation or waiting.");
   return locked(name, async () => {
     const state = await active(name);
-    const checks = [...probes(state.recipe, scope, maxHeadAge), ...(options.checks || [])];
+    const checks = options.probes ?? [...probes(state.recipe, scope, maxHeadAge), ...(options.checks || [])];
     const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000, (options.deadline ?? Infinity) / 1000);
     if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("No remaining lease time for readiness.");
     const runner = await readFile(new URL("../harness/readiness.py", import.meta.url), "utf8");

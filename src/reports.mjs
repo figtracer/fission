@@ -106,7 +106,7 @@ export async function report(name, id, options = {}) {
   const sourceReproducible = !state.source || observedSource?.clean === true && /^[a-f0-9]{40}$/.test(observedSource.commit);
   const replayable = recipeVerified && sourceReproducible && job && id !== state.bootstrapJob && id !== state.repairJob && job.spec?.commands?.length;
   const rows = [
-    ...(state.task ? [["Task", `${state.task.harness} / ${state.task.mode}`], ["Outcome", state.task.outcome], ["Cleanup confirmed", value.cleanup.confirmed]] : []),
+    ...(state.task ? [["Task", state.task.harness ? `${state.task.harness} / ${state.task.mode}` : state.task.kind === "rental" ? "Machine access" : "User commands"], ["Outcome", state.task.outcome], ["Cleanup confirmed", value.cleanup.confirmed]] : []),
     ["Generated (UTC)", generatedAt], ["Requested (UTC)", state.requestedAt], ["Machine", name], ["Provider", state.provider],
     ["Recipe", state.recipe.name], ["Run", id || "Workspace"], ["Recorded result", job?.phase || state.phase],
     ["Started (UTC)", startedAt], ["Finished (UTC)", finishedAt], ["Duration (seconds)", value.run?.durationSeconds],

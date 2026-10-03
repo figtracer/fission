@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, processAlive, OperationLocked } from "./state.mjs";
 import { createPlan, openPlan } from "./plans.mjs";
-import { taskSpec, taskFileOptions } from "./harnesses.mjs";
+import { taskSpec, taskFileOptions } from "./task-spec.mjs";
 import { budget, units, amount } from "./budget.mjs";
 import { active, prepare, reconcile, refresh, close, upload, download, terminal, operationCap } from "./workspace.mjs";
 import { execute } from "./provider.mjs";
@@ -13,8 +13,7 @@ import { launch, listJobs, getJob, jobDone } from "./jobs.mjs";
 import { report } from "./reports.mjs";
 import { check } from "./readiness.mjs";
 import { fingerprint } from "./experiments.mjs";
-import { cachePreflight, buildCache, stageCacheInput } from "./cache.mjs";
-import { guidance } from "./onboarding.mjs";
+import { buildCache, stageCacheInput } from "./cache.mjs";
 
 // The plan owns authorization; workspace state owns coordination; jobs own
 // execution. This supervisor cannot purchase. Recorded mutations are observed,
@@ -86,30 +85,6 @@ async function planTask(name, options, command, experiment) {
   const ledger = await budget();
   if (units(options.budget) > units(ledger.availableToAllocate)) throw new Error("Retained aggregate authorization cannot cover this task. No quote or purchase submitted.");
   if (experiment) task.experiment = experiment;
-  if (task.mode !== "custom" && task.harness !== "linux") task.guidance = await guidance("", { ...options, harness: task.harness, mode: task.mode });
-  if (["test", "build"].includes(task.mode)) {
-    task.cache = await cachePreflight({ ...options, mode: task.mode }, definition);
-    const downloads = task.cache.dependencies?.candidate;
-    if (downloads) {
-      const remote = "/workspace/.fission/dependency-cache.tar.gz";
-      if (task.inputs.some((input) => input.remote === remote)) throw new Error("Input conflicts with the selected dependency cache.");
-      task.inputs.push({ local: downloads.local, remote, bytes: downloads.bytes, sha256: downloads.id, optionalCache: true });
-      const command = ["python3", "-c", await readFile(new URL("../harness/cargo-cache.py", import.meta.url), "utf8"),
-        "restore", remote, String(downloads.maximum), downloads.id];
-      const build = task.preparation.findIndex((argv) => argv[2] === "ensure-build");
-      task.preparation.splice(build < 0 ? task.preparation.length : build, 0, command);
-      task.artifacts.push("/workspace/dependency-cache-result.json");
-    }
-    const candidate = task.cache.candidate;
-    if (candidate) {
-      const remote = "/workspace/.fission/build-cache.tar.gz";
-      if (task.inputs.some((input) => input.remote === remote)) throw new Error("Input conflicts with the selected build cache.");
-      task.inputs.push({ ...(candidate.local ? { local: candidate.local } : {}), remote, bytes: candidate.bytes, sha256: candidate.id,
-        ...(candidate.cacheWorkspace ? { cache: { workspace: candidate.cacheWorkspace, maximum: candidate.maximum } } : {}) });
-      task.preparation.unshift(["python3", "/workspace/.fission/rust-source.py", "cache-reuse", remote, candidate.id, String(candidate.maximum)]);
-      task.artifacts.push("/workspace/cache-result.json");
-    }
-  }
   const { digest, ...recipe } = definition;
   const plan = await createPlan(name, { recipe, repo: options.repo, ref: options.ref, disk,
     cpu: options.cpu, memory: options.memory, budget: options.budget, duration: options.duration,
@@ -122,6 +97,14 @@ async function planTask(name, options, command, experiment) {
     machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
+    setup: {
+      recipe: { name: definition.name, sha256: definition.digest, prepareCommands: definition.prepare.length,
+        afterCheckoutCommands: definition.afterCheckout?.length || 0 },
+      declaredRecipe: options.recipe || null, source: plan.source || null,
+      preparation: task.preparation, scope: task.scope, checks: task.probes,
+      inputs: task.inputs.map(({ remote, bytes, sha256 }) => ({ remote, bytes, sha256 })),
+      command: task.command, cwd: task.cwd, artifacts: [...definition.artifacts, ...task.artifacts],
+    },
     fallback: plan.selection ? { strategy: "cheapest", baseline: plan.selection.baseline, creationCap: plan.creationCap,
       providerCount: plan.selection.providerCount, quoteErrors: plan.selection.quoteErrors, skipped: plan.selection.skipped,
       alternates: plan.selection.alternates.map((item) => ({ provider: plan.provider, machine: item.machine.id, resources: item.capabilities })),
@@ -465,8 +448,10 @@ export async function supervise(name) {
         } else if (step === "readiness") {
           const deadline = Math.min(Math.min(state.task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - state.task.timing.cleanupSeconds * 1000,
             Date.parse(state.requestedAt) + (state.task.timing.provisioningSeconds + state.task.timing.preparationSeconds) * 1000);
-          const observation = await check(name, state.task.scope, 120, state.task.readiness || state.task.maxHeadAge,
-            { deadline, checks: state.task.checks });
+          const observation = state.task.schemaVersion === 2 && !state.task.probes.length
+            ? { ready: true, checks: [], note: "Machine access is ready; no application checks requested." }
+            : await check(name, state.task.scope, 120, state.task.readiness || state.task.maxHeadAge,
+              { deadline, probes: state.task.probes, checks: state.task.checks });
           await update(name, (task, current) => {
             task.readinessResult = observation;
             if (!observation.ready) {

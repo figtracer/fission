@@ -1,6 +1,6 @@
 # Choosing compute
 
-Use a Linux machine for repository builds, Foundry/Reth/Tempo setup, SSH, or
+Use a Linux machine for repository builds, your own software, SSH, or
 long-running work. Use Judge0 for a short, self-contained source file.
 
 ## Short code jobs

@@ -1,105 +1,59 @@
-import { guide, guideTopics, guidance } from "./onboarding.mjs";
-import { harnesses } from "./harnesses.mjs";
+import { guide, guideTopics } from "./onboarding.mjs";
 
-const run = `Run a managed Linux task; preview without --approve.
+const run = `Run your commands on a Linux machine; preview without --approve.
 
-Usage: fission run NAME --harness foundry|reth|tempo|linux --budget AMOUNT
-       --duration TOTAL --work-duration WORK --region REGION [OPTIONS]
-       [--approve] -- COMMAND [ARG...]
+Usage: fission run NAME --budget AMOUNT --duration TOTAL --work-duration WORK
+       --region REGION [OPTIONS] [--approve] -- COMMAND [ARG...]
+       fission run NAME --from task.json --budget AMOUNT [--approve]
 
-Fission selects compatible quotes, reserves the task budget, prepares and checks
-the environment, runs the argv, collects evidence, then destroys and confirms.
-The local supervisor survives terminal/agent disconnect. No replacement purchase.
-Before payment, failed quotes/capacity checks may select a retained alternative,
-cheapest compatible first within the creation cap, with no percentage premium rule.
-Resource floors, region, duration and lifecycle headroom stay unchanged. Preview
-lists alternatives and failures. Current VM offers still share a single gateway.
+Fission selects a compatible machine, runs your commands, collects requested
+files and logs, and cleans up. You choose the software, setup and success checks.
+Commands are argv arrays; use sh -c explicitly for a shell script.
 
 Options:
-  --mode MODE             See harness help; test never builds release binaries first
-  --snapshot PRESET       Synced Reth/Base: minimal, full (default), archive
-  --repo URL --ref SHA     Public GitHub source at a full commit; required for test/build
-  --patch FILE            Apply git diff --binary HEAD once before source test/build
-  --input FILE[=REMOTE]    Upload a regular file, repeatable; default /workspace/basename
-  --artifact /workspace/F Collect an output file, repeatable (not a database)
-  --cwd DIR               Guest cwd; default /workspace/source with repo, else /workspace
-  --cpu N --memory GiB --disk GiB  Set resources; selected snapshot disk remains a minimum
-  --machine ID             Require one exact catalog machine; disables fallback
-  --no-resize             Direct VM; required above 4 vCPU/8 GiB for short alpha tasks
-  --cache-workspace NAME  Use an initialized retained VPS for clean build caches
-  --cache-max-bytes N     Bound its compressed and expanded archive sizes
-  --prepare-duration D    Raise the preparation allowance for this task
-  --output DIR            Local timestamped reports (default ./fission)
+  --cpu N --memory GiB --disk GiB  Minimum machine resources
+  --machine ID                    Select an exact catalog machine
+  --no-resize                     Direct provisioning (required above 4 CPU/8 GiB)
+  --input FILE[=/workspace/PATH]   Upload a file; repeatable
+  --artifact /workspace/PATH      Retrieve an output file; repeatable
+  --cwd DIR                       Guest working directory (default /workspace)
+  --repo URL --ref SHA            Optional public GitHub checkout at a full commit
+  --prepare-duration D            Setup allowance (default 10m)
+  --output DIR                    Local results (default ./fission)
 
-Ecosystem-specific options: fission help foundry, reth, or tempo.
-Source tasks inspect local caches before quotes. Binary cache candidates require
-exact guest verification; they are not Cargo test caches. See help harnesses.
+TOTAL includes 30m provisioning, setup, WORK and 15m cleanup. Allowances are
+estimates, not performance guarantees. A prepaid lease may outlast your task.
+Large direct machines may require prepaying a day; inspect the quote.
 
-Short code execution: fission help code (Judge0, no VM required).
+A task file contains {schemaVersion: 1, task: {...options, command: ["program"]}}.
+Optional preparation contains argv arrays run after inputs arrive. Optional checks
+contain {name, scope: "tools", argv, result: "exit"|"json"}; JSON checks must emit
+{"ready":true}. No application checks are required or inferred. Setup failures
+stop the run. Use scripts or source archives for any repository or toolchain.
 
-Task file: fission run NAME --from task.json --budget TOTAL [--approve]
-Use {schemaVersion: 1, task: {...run options, command: ["program", "arg"]}}.
-Choose a built-in harness, or supply an embedded recipe plus cpu, memory, disk,
-prepare-duration and scope. Custom recipes define guest preparation and named
-readiness checks; preparation argv run after uploads. See help harnesses/task-files.
-Budget is both required in the task and bounded by --budget. Paths resolve beside
-this file. Preview validates and quotes; document commands only execute on the VM.
+For multiple machines, replace task with machines: [{name, ...task}, ...]. Each
+has its own budget and lifetime; --budget bounds the combined allocation.
+Purchases are sequential, not atomic. Fission never silently buys a replacement.
+Coordination between workloads is supplied by your commands.
 
-Multiple machines: fission run NAME --from experiment.json --budget TOTAL [--approve]
-The file supplies schemaVersion: 1 and machines: [{name, harness, mode, budget,
-duration, "work-duration", region, command: ["program", "arg"], ...run options}].
-Each role has explicit resources/time/cost. File paths resolve beside the manifest.
-Preview shows all machines and summed allocations before any purchase. Approval
-accepts that set; payments are not atomic and later failure never buys a replacement.
-Group stop during creation waits for the approved purchase sequence, then cancels
-all purchased roles. Use status/stop NAME or NAME-ROLE. No machine-count limit.
-
-TOTAL includes provisioning + preparation + WORK + cleanup. Default allowances:
-30m provisioning, 10m prebuilt / 1h source / 4h synced preparation, 15m cleanup.
-They are planning policy based on dated observations, not performance guarantees.
-Preview includes the evidence and uncertainty. Short plans reject before spending.
-The prepaid lease can outlive TOTAL; no extra execution is authorized by credit.
---no-resize preserves TOTAL and its guest deadline while bypassing starter migration.
-Public-alpha automatic resize is limited to targets up to 4 vCPU and 8 GiB RAM;
-larger short tasks must use explicit direct provisioning and still prepay one day.
-Resizable short leases wait for healthy cloud-init before migration, then require
-the trusted guest—not provider plan fields—to show the selected CPU, RAM, root
-disk, and healthy initialization. The gateway exposes no provider upgrade-job ID;
-an accepted resize remains unfinished until guest verification succeeds.
-
-Example (amount/duration must be authorized):
-  fission run my-task --harness foundry --budget 0.50 --duration 2h \\
-    --work-duration 10m --region ams --input checks.py --approve -- python3 checks.py
-
-All data is JSON. --help before -- is local; flags after -- belong to the workload.
+See help tasks for an example and help code for short jobs without a VM.
 Use status NAME --wait 10m to observe; stop NAME requests early cleanup.`;
 
-const rent = `Rent a managed Linux machine and hand over SSH access; preview without --approve.
+const rent = `Rent a Linux machine for SSH access; preview without --approve.
 
 Usage: fission rent NAME --budget AMOUNT --duration TOTAL --region REGION
-       [--harness linux|foundry|reth|tempo] [OPTIONS] [--approve]
+       [--cpu N --memory GiB --disk GiB] [--approve]
        fission rent NAME --from task.json --budget AMOUNT [--approve]
 
-Linux is the default. Foundry installs contract tools; Reth defaults to its
-executable only; Tempo defaults to an isolated development node. Select a mode
-for source preparation, builds or synced nodes. Read the ecosystem's help for
-its environment choices. Ordinary repositories can supply a task-file recipe.
-The task file accepts the same setup fields as run, with no command/work-duration.
+Use status NAME --wait 10m, then ssh NAME. Install and run whichever software
+you need. Optional task-file preparation runs your setup before handover.
+Use the same fields as run, omitting command and work-duration.
 
-Preview, approve within the user's budget, then status NAME --wait DURATION.
-When ready, use fission ssh NAME. Inside the Fission tmux dashboard, --tmux
-selects its window (start the dashboard with fission advanced tmux). The owner keeps the
-rental until stop NAME or the cleanup cutoff. Disconnecting SSH does not stop it.
-No workload, dummy sleep command or experiment report is required.
-
-TOTAL starts at purchase and includes provisioning, preparation and cleanup;
-it is not guaranteed hands-on time. Preview retains those allowances. Status
-shows usableUntil and readiness; do not count preparation as interactive access.
-Request enough total time when the user needs a particular working interval.
-
-Resource, input, source, node, cache and preparation options match help run.
---work-duration and workload argv apply to run only. Status retains spending,
-readiness and cleanup even when no report or output artifacts were requested.`;
+TOTAL includes provisioning, setup and cleanup from purchase, not guaranteed
+hands-on time. The rental stays open until stop NAME or its authorized cutoff.
+Disconnecting SSH does not stop it. Use stop NAME and confirm cleanup with status.
+SSH --tmux selects its window inside the Fission tmux dashboard.
+See help run for resource, transfer and setup options.`;
 
 const status = `Observe tasks or resume the same recorded task.
 
@@ -146,7 +100,7 @@ const advanced = {
   report: "NAME [JOB] [--log FILE] [--notes FILE] [--measurements FILE] [--output DIR]",
   list: "[--json]", status: "NAME [--refresh] [--json]", spending: "[--refresh]",
   machines: "--region REGION [--profile PROFILE] [--duration DURATION] [--max-spend AMOUNT] [--cpu N --memory GiB --disk GiB]",
-  capabilities: "[foundry|reth|tempo|linux]", recipes: "",
+  capabilities: "", recipes: "",
   storage: "[--storage-dir DIR] [--max-bytes BYTES]",
   cache: "init|list|save|restore (use command-specific help)", "cache init": "HOST",
   "cache list": "[--storage-dir DIR | --cache-workspace HOST]",
@@ -175,12 +129,12 @@ Usage: fission                     Open the Rust task dashboard
        fission campaign expand     Expand a local seeded worker manifest
        fission help COMMAND        Focused syntax; COMMAND --help also works
 
-Harnesses: foundry, reth, tempo; linux fallback. See help harnesses.
+You supply the workflow; Fission manages machines, budgets and cleanup.
 Use rent for access or run for a workflow. No embedded agent runs in the VM.
 MPP/Tempo purchase path. See help rental.
 --approve uses existing budget and duration authorization.
 Durations: s/m/h/d, at least 60s; provider availability and authorization bound leases.
-Memory/disk: GiB. Money: USDC.e. Guidance: fission help index [WORDS].
+Memory/disk: GiB. Money: USDC.e.
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
   if (key === "code") return `Run a short source file through Judge0 using MPP.
@@ -205,9 +159,6 @@ Use an ordinary Linux run when the task needs those capabilities.`;
   if (key === "ssh") return "fission ssh — Connect to a ready machine.\n\nUsage: fission ssh NAME [--tmux]\n\nRequires an interactive terminal. Disconnecting leaves its managed lifetime intact.\nUse fission stop NAME when finished.";
   if (key === "run") return `fission run — ${run}`;
   if (key === "campaign") return `fission campaign — Expand a deterministic seeded campaign locally; this never reads the ledger, quotes, or purchases.\n\nUsage: fission campaign expand CAMPAIGN.json --output MANIFEST.json\n\nThe campaign declaration has schemaVersion 1, kind "campaign", workers, baseSeed,\nseedStride, budget, and a single worker template. Fission expands worker-0 through\nworker-N with seed = baseSeed + index × seedStride, replacing only whole argv\nelements {{seed}}, {{workerIndex}}, and {{workerCount}}. The template must include\n{{seed}}. The output is an ordinary schemaVersion 1 multi-machine manifest; inspect\nit, then use fission run NAME --from MANIFEST.json --budget CAMPAIGN_BUDGET.\n\nExpansion validates every worker locally, resolves template local paths relative to\nthe campaign file, refuses to overwrite output, and does not coordinate a shared\nfuzz corpus or authorize a purchase. Existing manifests remain unchanged.`;
-  if (parts[0] === "index") return JSON.stringify(await guidance(parts.slice(1).join(" ")), null, 2);
-  if (["run", "rent"].includes(parts[0]) && parts.length === 2 && Object.hasOwn(harnesses, parts[1]))
-    return `${await help([parts[0]])}\n\n${await help([parts[1]])}`;
   if (key === "status") return `fission status — ${status}`;
   if (key === "budget") return `fission budget — ${budget}`;
   if (key === "stop") return "fission stop — Cancel the managed task and collect available evidence before teardown.\n\nUsage: fission stop NAME\n\nReturns recorded cancellation intent; use status NAME --wait DURATION to confirm\ncleanup. Repeating stop observes the same task, not a second purchase or DELETE.";
@@ -231,11 +182,9 @@ payment. See help rental for unavailable candidates.`;
   if (key === "advanced") return `Secondary recovery interface; not the normal task workflow.\n\nUsage: fission advanced COMMAND ...\n\n${Object.keys(advanced).filter((key) => !key.includes(" ")).join(", ")}\n\nUse fission help advanced COMMAND [SUBCOMMAND] for syntax. Saved old plans/jobs\nremain readable. Direct-open and watch were removed; no history is migrated.\nNever manually mutate a managed task while its supervisor is active.`;
   if (parts[0] === "advanced" && Object.hasOwn(advanced, parts.slice(1).join(" "))) {
     const command = parts.slice(1).join(" ");
-    return `fission advanced ${command} — Low-level recovery.\n\nUsage: fission advanced ${command} ${advanced[command]}\n\nRead help rental for lifecycle safety, help harnesses for preparation/storage.\nRepair requires inspecting partial effects before --approve. Unknown launches and\ntermination outcomes must be observed, never replayed. Output remains structured.`;
+    return `fission advanced ${command} — Low-level recovery.\n\nUsage: fission advanced ${command} ${advanced[command]}\n\nRead help rental for lifecycle safety, help tasks for setup and execution.\nRepair requires inspecting partial effects before --approve. Unknown launches and\ntermination outcomes must be observed, never replayed. Output remains structured.`;
   }
   if (key === "guides") return guide();
-  if (parts.length === 1 && Object.hasOwn(harnesses, key))
-    return (await guide(`harnesses/${key}`)) + (key === "reth" ? `\n\n${await guide("reth")}` : "");
   if (parts.length === 1 && guideTopics.includes(key.split("/")[0])) return guide(key);
   throw new Error(`Unknown help topic: ${key}. Use fission help or fission help advanced.`);
 }

@@ -16,6 +16,7 @@ const preparationDeadline = (state) => state.task ? Math.min(
   state.task.deadline - state.task.timing.cleanupSeconds * 1000,
   Date.parse(state.providerExpiresAt || state.deadlineEstimate) - state.task.timing.cleanupSeconds * 1000,
 ) : undefined;
+// Compatibility for recorded source jobs and caches; new tasks have no ecosystem modes.
 export const sourceRecipes = {
   "foundry-source": ["forge", "cast", "anvil", "chisel"],
   "reth-source": ["reth"],
@@ -24,68 +25,8 @@ export const sourceRecipes = {
 };
 
 export async function recipe(input = "linux") {
-  let value;
-  if (typeof input === "object" && input !== null && input.extends !== undefined) {
-    if (!["linux", "foundry", "foundry-symbolic", "reth", "reth-synced", "base-synced", "tempo", "tempo-node", ...Object.keys(sourceRecipes)].includes(input.extends))
-      throw new Error("Recipe extends must name a bundled setup.");
-    const { digest, ...base } = await recipe(input.extends);
-    const { extends: inherited, ...overrides } = input;
-    value = { ...base, ...overrides };
-    for (const field of ["prepare", "afterCheckout", "readiness", "checks", "artifacts"])
-      if (base[field] || overrides[field]) {
-        if (overrides[field] !== undefined && !Array.isArray(overrides[field])) throw new Error(`${field} must be an array.`);
-        value[field] = [...(base[field] || []), ...(overrides[field] || [])];
-      }
-  } else if (typeof input === "object" && input !== null) value = input;
-  else if (input === "foundry-symbolic") {
-    const { digest, ...foundry } = await recipe("foundry");
-    value = { ...foundry, name: input, description: "Prebuilt Foundry 1.8.1 and Z3 5.1.0 for bounded symbolic tests; Linux x86_64, glibc >= 2.39. No source build.",
-      prepare: [...foundry.prepare, ["python3", "-c", await readFile(new URL("../harness/foundry-symbolic.py", import.meta.url), "utf8")]],
-      readiness: [...foundry.readiness, ["/workspace/z3", "--version"]],
-      artifacts: ["/workspace/symbolic-tools.json"] };
-  } else if (input === "tempo-node") {
-    const tempo = await recipe("tempo"), files = {};
-    for (const name of ["tempo-node.py", "node_options.py"])
-      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
-    value = { name: input, description: "Verified Tempo binary with configurable managed node startup.",
-      prepare: [tempo.prepare[0], ["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
-        ["python3", "/workspace/.fission/tempo-node.py", "install"]],
-      readiness: [["/workspace/tempo", "--version"]], checks: [{ name: "tempo-node", scope: "node", argv: ["/workspace/tempo-node", "status"], result: "json" }],
-      artifacts: ["/workspace/tempo-tools.json", "/workspace/tempo-data/current.json"] };
-  } else if (input === "reth-synced") {
-    const files = {};
-    for (const name of ["ethereum-node.py", "ethereum-ready.py", "node_options.py"])
-      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
-    value = { name: input, description: "Prepare pinned Reth/Lighthouse tools and permit their P2P ports through UFW. Bootstrap does not import data or start nodes.",
-      prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
-        ["python3", "/workspace/.fission/ethereum-node.py", "install"],
-        ...["30303/tcp", "30303/udp", "9000/tcp", "9000/udp", "9001/udp"].map((port) => ["ufw", "allow", port]),
-        ["ufw", "status", "verbose"]],
-      readiness: [["/workspace/.fission/clients/reth-2.5.2", "--version"], ["/workspace/.fission/clients/lighthouse-8.2.2", "--version"]],
-      artifacts: ["/workspace/ethereum-tools.json"] };
-  } else if (input === "base-synced") {
-    const files = {};
-    for (const name of ["base-node.py", "base-ready.py", "node_options.py"])
-      files[name] = await readFile(new URL(`../harness/${name}`, import.meta.url), "utf8");
-    value = { name: input, description: "Prepare the pinned unified Base execution/rollup-consensus binary. Bootstrap does not import data or start the node.",
-      prepare: [["python3", "-c", "import pathlib,json,sys; p=pathlib.Path('/workspace/.fission'); p.mkdir(parents=True,exist_ok=True); [(p/name).write_text(text) for name,text in json.loads(sys.argv[1]).items()]", JSON.stringify(files)],
-        ["python3", "/workspace/.fission/base-node.py", "install"],
-        ...["30303/tcp", "30303/udp", "9222/tcp", "9223/udp"].map((port) => ["ufw", "allow", port]),
-        ["ufw", "status", "verbose"]],
-      readiness: [["/workspace/.fission/clients/base-1.4.0", "--version"]],
-      artifacts: ["/workspace/base-tools.json"] };
-  } else {
-    const file = ["linux", "reth", "foundry", "tempo"].includes(input) ? join(recipeDirectory, `${input}.json`) : resolve(input);
-    const binaries = Object.hasOwn(sourceRecipes, input) ? sourceRecipes[input] : null;
-    const sourceHarness = binaries ? await readFile(new URL("../harness/rust-source.py", import.meta.url), "utf8") : null;
-    value = binaries ? {
-      name: input, description: "Prepare Rust 1.96.1 and the exact source checkout. Run /workspace/build as a separate job; no node is started.",
-      prepare: [["python3", "-c", "import pathlib,subprocess,sys; p=pathlib.Path('/workspace/.fission/rust-source.py'); p.parent.mkdir(exist_ok=True); p.write_text(sys.argv[1]); subprocess.run(['python3',str(p),'prepare-packages'],check=True)", sourceHarness]],
-      afterCheckout: [["python3", "/workspace/.fission/rust-source.py", "prepare", ...binaries]],
-      readiness: [["/workspace/cargo", "--version"], ["/workspace/rustc", "--version"]],
-      artifacts: ["/workspace/source.json", "/workspace/build-identity-check.json"],
-    } : JSON.parse(await readFile(file, "utf8"));
-  }
+  const value = typeof input === "object" && input !== null ? input
+    : JSON.parse(await readFile(input === "linux" ? join(recipeDirectory, "linux.json") : resolve(input), "utf8"));
   return validateRecipe(value);
 }
 

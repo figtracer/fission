@@ -76,7 +76,7 @@ export const providers = [{
   id: "payweave-sandbox", available: false, gateway: "PayWeave", operator: "Unspecified",
   payment: "MPP Tempo USDC.e or x402",
   price: "$0.01 / execution, at most 60s (published Sep 15, 2026)",
-  reason: "Single-use command execution only. No persistent machine, SSH, resource guarantees or separate status/terminate routes. Not compatible with managed harness preparation and artifact transfers.",
+  reason: "Single-use command execution only. No persistent machine, SSH, resource guarantees or separate status/terminate routes. Not compatible with managed setup and artifact transfers.",
   evidence: "https://sandbox.payweave.services/skill.md",
 }].map((provider) => ({ ...provider, warning: providerWarning(provider.id) }));
 
@@ -256,11 +256,11 @@ export async function createPlan(name, options, task) {
   if (options.from) options = await (await import("./experiments.mjs")).planOptions(options);
   const definition = await recipe(options.recipe || "linux");
   const recipeName = definition.name;
-  if (task?.mode !== "custom" && ["reth-synced", "base-synced", "foundry-symbolic"].includes(recipeName)) {
+  if (task?.schemaVersion !== 2 && task?.mode !== "custom" && ["reth-synced", "base-synced", "foundry-symbolic"].includes(recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error(`The ${recipeName} recipe requires its matching profile.`);
     options.profile = recipeName;
   }
-  if (task?.mode !== "custom" && Object.hasOwn(sourceRecipes, recipeName)) {
+  if (task?.schemaVersion !== 2 && task?.mode !== "custom" && Object.hasOwn(sourceRecipes, recipeName)) {
     if (options.profile && options.profile !== recipeName) throw new Error("A source recipe requires its matching source profile; use hardware flags to raise its requirements.");
     if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");
     options.profile = recipeName;

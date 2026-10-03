@@ -3,11 +3,11 @@ import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { list, load, locked } from "./state.mjs";
 import { execute, providerWarning } from "./provider.mjs";
-import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair, sourceRecipes } from "./workspace.mjs";
+import { refresh, reconcile, active, upload, download, close, operationCap, prepare, repair } from "./workspace.mjs";
 
 import { budget } from "./budget.mjs";
 import { providers, profiles, createPlan, openPlan, machineOffers } from "./plans.mjs";
-import { harnesses, taskOptions } from "./harnesses.mjs";
+import { taskOptions } from "./task-spec.mjs";
 import { runTask, runFile, taskStatus, resumeTask, stopTask, supervise } from "./tasks.mjs";
 import { runJob, getJob, waitJob, listJobs } from "./jobs.mjs";
 import { duration } from "./workspace.mjs";
@@ -66,12 +66,8 @@ async function main() {
   const tail = separator < 0 ? [] : raw.slice(separator + 1);
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" }, tmux: { type: "boolean" },
-    harness: { type: "string" }, mode: { type: "string" }, chain: { type: "string" }, solver: { type: "string" },
-    patch: { type: "string" },
     "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
     input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
-    snapshot: { type: "string" }, manifest: { type: "string" }, "manifest-url": { type: "string" }, "snapshot-plan": { type: "string" }, "checkpoint-url": { type: "string" }, checkpoint: { type: "string" }, "extra-disk-gib": { type: "string" },
-    "l1-execution-url": { type: "string" }, "l1-beacon-url": { type: "string" }, "max-safe-age": { type: "string" }, "max-l1-head-age": { type: "string" }, "max-l1-lag-blocks": { type: "string" }, "max-tip-lag-blocks": { type: "string" },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     "no-resize": { type: "boolean" },
@@ -80,7 +76,7 @@ async function main() {
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
     "raise-to": { type: "string" }, approval: { type: "string" },
     "storage-dir": { type: "string" },
-    "max-bytes": { type: "string" }, "cache-workspace": { type: "string" }, "cache-max-bytes": { type: "string" },
+    "max-bytes": { type: "string" }, "cache-workspace": { type: "string" },
     scope: { type: "string" }, "max-head-age": { type: "string" },
     from: { type: "string" }, measurements: { type: "string" },
     log: { type: "string" }, notes: { type: "string" }, recipe: { type: "string" }, duration: { type: "string" }, "max-spend": { type: "string" }, output: { type: "string" },
@@ -91,7 +87,6 @@ async function main() {
     const [command] = positionals;
     const topic = command === "help" ? positionals.slice(1)
       : positionals.slice(0, ["cache", "dataset", "skill"].includes(command) ? 2 : 1);
-    if (!advanced && ["run", "rent"].includes(command) && values.harness) topic.push(values.harness);
     console.log(await help(advanced ? ["advanced", ...topic] : topic)); return;
   }
   if (advanced && !positionals.length) { console.log(await help(["advanced"])); return; }
@@ -144,8 +139,8 @@ async function main() {
       break;
     }
     case "capabilities": {
-      if (name && !Object.hasOwn(harnesses, name)) throw new Error("Unknown harness.");
-      emit({ providers, profiles, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" }, harnesses: name ? { [name]: harnesses[name] } : harnesses });
+      if (name) throw new Error("Capabilities describe machines; no environment selection is required.");
+      emit({ providers, units: { memory: "GiB", disk: "GiB", cpu: "provider vCPUs; not dedicated physical cores" } });
       break;
     }
     case "budget":
@@ -226,9 +221,7 @@ async function main() {
       break;
     }
     case "recipes":
-      emit([{ name: "linux", purpose: "Linux shell and Python workspace" }, { name: "reth", purpose: "Pinned Reth binary with a local development chain" }, { name: "reth-synced", purpose: "Pinned Reth/Lighthouse tools for full Ethereum mainnet snapshot import and sync jobs", profile: "reth-synced" }, { name: "base-synced", purpose: "Pinned unified Base execution/rollup-consensus tool for managed Base mainnet sync", profile: "base-synced" }, { name: "foundry", purpose: "Pinned Foundry executables" }, { name: "tempo", purpose: "Pinned Tempo executable with an isolated development chain" },
-        { name: "foundry-symbolic", purpose: "Prebuilt Forge and Z3 for bounded symbolic properties; Linux x86_64, glibc >= 2.39", profile: "foundry-symbolic" },
-        ...Object.keys(sourceRecipes).map((name) => ({ name, purpose: "Pinned source checkout, Rust 1.96.1 and build dependencies; run /workspace/build as a separate job", sourceRequired: true, profile: name }))]);
+      emit([{ name: "linux", purpose: "Linux workspace; supply your own setup commands" }]);
       break;
     case "open": {
       if (!values.plan || !values.approve) throw new Error("Use a saved --plan with --approve; direct-open preparation was consolidated into saved plans.");

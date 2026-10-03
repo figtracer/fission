@@ -61,7 +61,7 @@ async function main() {
       name: state.name,
       phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,
       managed: Boolean(task), experiment: task?.experiment || null,
-      taskDetail: code ? `Judge0 | one-shot code | cleanup not applicable` : task ? `${task.kind === "rental" ? "rental | " : ""}${task.harness}/${task.mode} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
+      taskDetail: code ? `Judge0 | one-shot code | cleanup not applicable` : task ? `${task.kind === "rental" ? "rental | " : ""}${task.harness ? `${task.harness}/${task.mode}` : "user commands"} | owner ${task.supervisor.alive ? "running" : "absent (u resumes)"} | cleanup ${task.cleanup.confirmed ? "confirmed" : "unconfirmed"}` : "Retained workspace (advanced recovery)",
       active: !finished && !unresolved && Boolean(state.remoteId), unresolved,
       ssh: sshReady(state) && (task?.kind !== "rental" || task.ready),
       requested: state.requestedAt || "", expiry: Math.floor(((task?.usableUntil ? Date.parse(task.usableUntil) : state.task?.deadline) || Date.parse(state.providerExpiresAt || state.deadlineEstimate)) / 1000) || null,

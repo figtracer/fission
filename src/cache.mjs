@@ -2,15 +2,11 @@ import { mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { locked, readJSON, root, writeJSON } from "./state.mjs";
-import { active, upload, download, duration, operationCap, sourceRecipes } from "./workspace.mjs";
+import { active, upload, download, operationCap, sourceRecipes } from "./workspace.mjs";
 import { execute } from "./provider.mjs";
 import { fingerprint } from "./experiments.mjs";
 import { storageRoot, storage } from "./storage.mjs";
 import { listHostCaches, publishHostCache, stageHostCache } from "./cache-host.mjs";
-
-// Download caches are optional cleanup work: cap each transfer at 512 MiB,
-// rather than letting a large free disk consume the whole cleanup window.
-const downloadCacheMaximum = 512 * 1024 * 1024;
 
 const identifier = (cacheRoot, id) => {
   if (!/^[a-f0-9]{64}$/.test(id || "")) throw new Error("Use a SHA-256 cache ID from cache list.");
@@ -37,72 +33,6 @@ export async function listCaches(path, cacheWorkspace) {
     throw error;
   })));
   return records.filter(Boolean);
-}
-
-// Inspect candidate metadata before any rental or quote. Local archives are
-// hashed immediately; a VPS archive is bounded and hashed before guest use.
-// A candidate is not a hit until the guest verifies its complete build identity.
-export async function cachePreflight(options, definition) {
-  const cacheWorkspace = options["cache-workspace"];
-  const maximum = cacheWorkspace ? Number(options["cache-max-bytes"]) : undefined;
-  if (cacheWorkspace && (!Number.isSafeInteger(maximum) || maximum <= 0))
-    throw new Error("A cache VPS requires a positive integer --cache-max-bytes transfer and expansion limit.");
-  const location = cacheWorkspace
-    ? await listHostCaches(cacheWorkspace, Date.now() + duration(options.duration) * 1000)
-    : await storage();
-  const records = cacheWorkspace ? location.records : await listCaches();
-  const result = { kind: "release-binaries", checkedBeforeRental: true,
-    backend: cacheWorkspace ? { kind: "workspace", name: cacheWorkspace, remoteId: location.remoteId,
-      providerExpiresAt: location.providerExpiresAt } : { kind: "directory", directory: location.directory },
-    ...(cacheWorkspace ? { maximum } : { directory: location.directory }),
-    candidate: null, excluded: [], note: "Release binaries require exact guest identity; dependency download reuse is reported separately." };
-  if (!cacheWorkspace) {
-    const maximum = Math.min(downloadCacheMaximum, Math.floor(location.availableBytes / 2));
-    result.dependencies = { kind: "cargo-downloads", directory: location.directory, maximum, candidate: null, excluded: [] };
-    for (const record of records.filter((item) => item.kind === "cargo-downloads" && item.recipe === definition.name)
-      .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))) {
-      try {
-        if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.bytes) || record.bytes <= 0 || record.bytes > maximum ||
-            !Number.isSafeInteger(record.uncompressedBytes) || record.uncompressedBytes <= 0 || record.uncompressedBytes > maximum)
-          throw new Error("Download cache exceeds its size limit or schema differs");
-        const path = join(identifier(join(location.directory, "builds"), record.id), "build.tar.gz");
-        const actual = await fingerprint(path);
-        if (actual.sha256 !== record.id || actual.bytes !== record.bytes) throw new Error("Download cache digest or size differs");
-        result.dependencies.candidate = { id: record.id, local: path, bytes: actual.bytes, maximum };
-        break;
-      } catch (error) { result.dependencies.excluded.push({ id: record.id, reason: error.message }); }
-    }
-  }
-  if (options.mode !== "build" || options.patch) {
-    result.note = options.patch ? "Patched source compiles normally and can reuse matching dependency downloads." : "Cargo compiles and runs tests normally; matching dependency downloads can be reused.";
-    result.inspected = records.length;
-    return result;
-  }
-  const harness = await fingerprint(new URL("../harness/rust-source.py", import.meta.url));
-  for (const record of records.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))) {
-    const identity = record.identity;
-    if (record.kind === "cargo-downloads" || identity?.commit !== options.ref || JSON.stringify(identity.binaries) !== JSON.stringify(sourceRecipes[definition.name])) continue;
-    try {
-      if (!identity.clean || !identity.tree || identity.harnessSha256 !== harness.sha256)
-        throw new Error("Source identity schema or preparation harness differs");
-      if (record.schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(record.id || "") || !Number.isSafeInteger(record.bytes) || record.bytes <= 0 ||
-          !Number.isSafeInteger(record.uncompressedBytes) || record.uncompressedBytes <= 0)
-        throw new Error("Archive digest, size or metadata differs");
-      const limit = Math.max(record.bytes, record.uncompressedBytes);
-      if (cacheWorkspace && limit > maximum) throw new Error("Archive exceeds --cache-max-bytes");
-      if (cacheWorkspace) {
-        result.candidate = { id: record.id, bytes: record.bytes, maximum: limit, savedAt: record.savedAt,
-          cacheWorkspace, remote: `/workspace/.fission/cache-host-v1/builds/${record.id}/build.tar.gz` };
-      } else {
-        const path = join(identifier(join(location.directory, "builds"), record.id), "build.tar.gz");
-        const actual = await fingerprint(path);
-        if (actual.sha256 !== record.id || actual.bytes !== record.bytes) throw new Error("Archive digest or size differs");
-        result.candidate = { id: record.id, local: path, bytes: actual.bytes, maximum: limit, savedAt: record.savedAt };
-      }
-      break;
-    } catch (error) { result.excluded.push({ id: record.id, reason: error.message }); }
-  }
-  return result;
 }
 
 export async function stageCacheInput(name, input, options = {}) {

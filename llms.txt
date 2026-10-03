@@ -1,6 +1,6 @@
 # Fission
 
-> Rent machines and run tasks with your coding agent. Built-in Foundry, Reth and Tempo setup, plus custom Linux environments. Payments use MPP on Tempo.
+> Rent machines and run tasks with your coding agent. Supply your own software and commands. Payments use MPP on Tempo.
 
 Normal interface:
 - `fission` — Rust dashboard
@@ -17,9 +17,8 @@ Everything manual or low-level is `fission advanced COMMAND`.
 
 Documentation:
 - [README](README.md)
-- [Harnesses](docs/harnesses.md)
+- [Tasks](docs/tasks.md)
 - [Rental safety and recovery](docs/rental.md)
-- [Synced Ethereum with Reth/Lighthouse](docs/reth.md)
 - [Installation](docs/install.md)
 - [Agent skill](skills/fission/SKILL.md)
 
