@@ -17,7 +17,7 @@ memory against its operator. No-signup rental does not make payments anonymous.
 Fission does not implicitly upload your working directory. For private source,
 provide a selected archive through `--input`. A Git archive avoids copying the
 entire `.git` directory, but tracked secrets still require review. Use scoped,
-short-lived credentials when a workflow needs authenticated access. Never put
+short-lived credentials when a workflow needs authenticated access. Use `--secret FILE[=NAME]` for secret file inputs. Never put
 credentials in command arguments: plans, job specifications and reports retain
 commands. Uploaded files are also retained on the guest until cleanup. Fission
 does not identify or scrub every possible secret in arbitrary program output.
@@ -33,8 +33,8 @@ the summary is not an anonymity guarantee or a replayable experiment.
 
 The surrounding report directory is the detailed local record. It retains
 commands, preparation, source and file metadata, logs, requested artifacts and
-payment receipts for diagnosis and reproducibility. Encrypt it yourself before
-uploading it to storage or sharing it with an intended recipient. Build caches
+payment receipts for diagnosis and reproducibility. Use `--encrypt-to` to collect encrypted files, or encrypt the detailed record
+yourself before uploading it to storage or sharing it with an intended recipient. Build caches
 can contain source paths, code and embedded credentials; treat them as private
 inputs and reuse them only across trusted workloads.
 
@@ -50,6 +50,61 @@ Cleanup records provider-confirmed termination, not proof that every provider
 backup or physical copy was erased. Closing the terminal alone does not delete a
 machine. Preserve Fission's accounting and cleanup records when cleaning local
 results.
+
+## Secret files
+
+Add `--secret ./token=api` to a run or rental. The workload reads
+`/workspace/.fission/secrets/api`. Task files use `"secret": ["./token=api"]`,
+with local paths resolved beside the task file. Use files, never inline values.
+
+Fission reads the file at dispatch and sends it once through SSH stdin. Plans
+retain its reference, not its content or content hash. A symlink used as the local file and symlinked
+guest parents are rejected; the guest file is created exclusively with mode 0600.
+An uncertain send fails preparation and leads to cleanup, rather than resending
+or guessing that the file is ready. The original local file remains yours.
+Secrets stay on the guest for the rental lifetime; destruction is not proof of
+secure erasure. Use short-lived credentials and revoke them when appropriate.
+
+The reserved secret directory cannot be selected as an artifact. Collection also
+rejects symlinks and hard links to files there. Your commands can still copy a
+secret elsewhere, print it, or return it from a check. Fission does not scrub such
+output, command arguments or observations. Ordinary input files keep their
+existing fingerprinted transfer behavior. Secret transfer requires SSH, and never
+falls back to an API request containing the secret.
+
+## Encrypted collection
+
+Install [age](https://github.com/FiloSottile/age) locally when you need encrypted
+exports. Generate and keep your identity yourself:
+
+```sh
+age-keygen -o identity.txt
+age-keygen -y identity.txt
+```
+
+Pass the printed public recipient as `--encrypt-to age1…`, or `"encrypt-to"` in a
+task file. Fission validates it before quoting or buying. Only native X25519 age
+recipients are supported. Fission never needs the private identity.
+
+Requested artifacts and collected job logs stream from SSH through local age
+before they reach a local file. Fission verifies the source stream and successful
+encryption before publishing a `.age` file; failed transfers retain only partial
+ciphertext and never fall back to plaintext. Cleanup still proceeds. Reports
+copy the ciphertext and record its format and public recipient. Decrypt with:
+
+```sh
+age --decrypt --identity identity.txt --output result.txt artifact.age
+```
+
+Use decrypted output only after age exits successfully; authentication errors
+can leave partial output. Keep your identity safe: Fission cannot recover it.
+
+This protects collected file contents, not every local record. Commands, file
+names, sizes, checksums, status/check observations, spending and source metadata
+remain in the owner-only records. Plaintext still exists on the guest and in
+memory while streaming. Encrypting exports does not hide execution from the host
+or retroactively encrypt older results. Fission does not upload ciphertext to an
+external storage service automatically.
 
 ## Protecting execution from the host
 

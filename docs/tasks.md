@@ -40,6 +40,11 @@ Optional `checks` run before the workload and use named argv checks with scope
 `tools` and result `exit` or `json`. JSON checks return `{"ready":true}` on success.
 An omitted check means no application readiness assertion was requested.
 
+Optional `secret` entries reference local files (`"token=api"`), exposed at
+`/workspace/.fission/secrets/api` through SSH. `"encrypt-to": "age1…"` encrypts
+collected artifacts and logs with your public recipient. See [privacy](privacy.md)
+for the local age dependency, key custody and limits.
+
 An optional embedded `recipe` supplies `name`, `prepare` argv arrays and `artifacts`,
 plus optional `afterCheckout`, `readiness` or named `checks`. Recipe preparation
 runs before inputs arrive. Most workflows only need `preparation` and `command`.

@@ -35,7 +35,7 @@ function resolveTemplate(template, base) {
     campaignError("template command must be a string argv array.");
   const resolved = { ...template, output: resolve(base, template.output || "fission") };
   for (const field of ["patch", "manifest", "snapshot-plan"]) if (resolved[field]) resolved[field] = resolve(base, resolved[field]);
-  if (resolved.input) resolved.input = resolved.input.map((value) => resolveInput(value, base));
+  for (const field of ["input", "secret"]) if (resolved[field]) resolved[field] = resolved[field].map((value) => resolveInput(value, base));
   return resolved;
 }
 

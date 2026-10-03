@@ -67,7 +67,7 @@ async function main() {
   const { values, positionals } = parseArgs({ args: separator < 0 ? raw : raw.slice(0, separator), allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, json: { type: "boolean" }, approve: { type: "boolean" }, tmux: { type: "boolean" },
     "work-duration": { type: "string" }, "prepare-duration": { type: "string" }, cwd: { type: "string" },
-    input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
+    input: { type: "string", multiple: true }, secret: { type: "string", multiple: true }, "encrypt-to": { type: "string" }, artifact: { type: "string", multiple: true },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     "no-resize": { type: "boolean" },

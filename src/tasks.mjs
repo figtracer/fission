@@ -91,6 +91,8 @@ async function planTask(name, options, command, experiment) {
     region: options.region, machine: options.machine, provider: options.machine ? "compute-mpp" : undefined,
     cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
     "no-resize": options["no-resize"] }, task);
+  if (plan.status !== "unavailable" && (task.inputs.some((input) => input.secret) || task.encryptTo) && plan.provider !== "compute-mpp")
+    throw new Error("Private file transfer requires an SSH machine. No payment submitted.");
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode,
     ...(task.chain ? { chain: task.chain } : {}),
@@ -102,7 +104,8 @@ async function planTask(name, options, command, experiment) {
         afterCheckoutCommands: definition.afterCheckout?.length || 0 },
       declaredRecipe: options.recipe || null, source: plan.source || null,
       preparation: task.preparation, scope: task.scope, checks: task.probes,
-      inputs: task.inputs.map(({ remote, bytes, sha256 }) => ({ remote, bytes, sha256 })),
+      inputs: task.inputs.map(({ remote, bytes, sha256, secret }) => ({ remote, bytes, sha256, ...(secret ? { secret: true } : {}) })),
+      ...(task.encryptTo ? { encryptTo: task.encryptTo } : {}),
       command: task.command, cwd: task.cwd, artifacts: [...definition.artifacts, ...task.artifacts],
     },
     fallback: plan.selection ? { strategy: "cheapest", baseline: plan.selection.baseline, creationCap: plan.creationCap,
@@ -166,12 +169,14 @@ async function createFromFile(name, options) {
     const { name: role, command = rental ? [] : undefined, ...settings } = entry;
     if (rental) settings.kind = "rental";
     for (const field of ["patch", "manifest", "snapshot-plan", "output"]) if (settings[field]) settings[field] = resolve(dirname(file), settings[field]);
-    if (settings.input !== undefined && (!Array.isArray(settings.input) || settings.input.some((item) => typeof item !== "string")))
-      throw new Error("input must be an array of file mappings.");
-    if (settings.input) settings.input = settings.input.map((mapping) => {
-      const i = mapping.indexOf("=");
-      return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
-    });
+    for (const field of ["input", "secret"]) {
+      if (settings[field] !== undefined && (!Array.isArray(settings[field]) || settings[field].some((item) => typeof item !== "string")))
+        throw new Error(`${field} must be an array of file mappings.`);
+      if (settings[field]) settings[field] = settings[field].map((mapping) => {
+        const i = mapping.indexOf("=");
+        return resolve(dirname(file), i < 0 ? mapping : mapping.slice(0, i)) + (i < 0 ? "" : mapping.slice(i));
+      });
+    }
     await taskSpec(settings, command); // Validate every role before the first quote.
     machines.push({ name: child, role, settings, command });
   }
@@ -350,10 +355,10 @@ async function finish(name, jobs) {
       });
       break;
     }
-    const local = join(destination, `${state.task.exports.length}-${basename(remote)}`);
+    const local = join(destination, `${state.task.exports.length}-${basename(remote)}${state.task.encryptTo ? ".age" : ""}`);
     state = await update(name, (task) => { task.exports.push({ remote, local, phase: "collecting" }); });
     try {
-      const result = await locked(name, async () => download(await active(name, false), remote, local, transfer));
+      const result = await locked(name, async () => download(await active(name, false), remote, local, { ...transfer, encryptTo: state.task.encryptTo }));
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), result, { phase: "collected" }); });
     } catch (error) {
       state = await update(name, (task) => { Object.assign(task.exports.find((item) => item.remote === remote), { phase: "partial", error: error.message }); });
@@ -504,6 +509,25 @@ export async function supervise(name) {
               Date.parse(state.requestedAt) + (task.timing.provisioningSeconds + task.timing.preparationSeconds) * 1000) };
             const input = task.inputs.find((item) => !item.uploadedAt && !item.cacheSkippedAt);
             try {
+              if (input.secret) {
+                // Resolve a reference once at dispatch. Never journal its contents
+                // or a dictionary-testable digest, and never replay an ambiguous send.
+                if (input.attemptedAt) {
+                  task.outcome = "preparation_failed";
+                  task.lastError = "Secret transfer unresolved; no repeated transfer.";
+                  return;
+                }
+                input.attemptedAt = new Date().toISOString();
+                await save(state);
+                try {
+                  await upload(state, input.local, input.remote, { ...transfer, secret: true });
+                  input.uploadedAt = new Date().toISOString();
+                } catch {
+                  task.outcome = "preparation_failed";
+                  task.lastError = "Secret transfer failed or is unresolved; no repeated transfer.";
+                }
+                return;
+              }
               const actual = await fingerprint(input.local);
               if (actual.sha256 !== input.sha256 || actual.bytes !== input.bytes) {
                 if (input.optionalCache) throw new Error("Cache changed after quote; using a cold run.");

@@ -1,8 +1,9 @@
-import { readFile, open, rename, mkdir, unlink } from "node:fs/promises";
+import { readFile, open, rename, mkdir, unlink, link } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
+import { encryptStream } from "./encryption.mjs";
 import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
 import { request, recoverCreate, execute, validRemoteId, CreateNotPurchased } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
@@ -298,17 +299,20 @@ async function fingerprint(file) {
 
 export async function upload(state, local, remote, options = {}) {
   remotePath(remote);
+  if (options.secret && providerId(state.provider) !== "compute-mpp") throw new Error("Secret files require the SSH transport; no API upload was attempted.");
   if (providerId(state.provider) === "compute-mpp") {
-    const source = await open(resolve(local), constants.O_RDONLY | constants.O_NONBLOCK);
+    const source = await open(resolve(local), constants.O_RDONLY | constants.O_NONBLOCK | (options.secret ? constants.O_NOFOLLOW : 0));
     const staging = remote + ".fission-" + randomUUID();
     try {
-      const expected = await fingerprint(source);
+      const info = await source.stat();
+      if (!info.isFile() || !Number.isSafeInteger(info.size)) throw new Error("Upload requires a regular file.");
+      const expected = options.secret ? { size: info.size } : await fingerprint(source);
       const script = await readFile(new URL("../harness/transfer.py", import.meta.url), "utf8");
-      const result = await execute(state, ["python3", "-c", script, "receive", staging, remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, inputFd: source.fd });
+      const result = await execute(state, ["python3", "-c", script, options.secret ? "receive-secret" : "receive", staging, remote, String(expected.size), ...(options.secret ? [] : [expected.sha256])], operationCap, undefined, { ...options, inputFd: source.fd });
       if (result.returncode) throw new Error("Upload verification or publication failed; destination must not exist.");
       const received = JSON.parse(result.stdout);
-      if (received.size !== expected.size || received.sha256 !== expected.sha256) throw new Error("Unrecognized upload acknowledgement.");
-      return { remote, bytes: expected.size, sha256: expected.sha256 };
+      if (received.size !== expected.size || !options.secret && received.sha256 !== expected.sha256) throw new Error("Unrecognized upload acknowledgement.");
+      return { remote, bytes: expected.size, ...(options.secret ? {} : { sha256: expected.sha256 }) };
     } catch (error) {
       throw new Error(`${error.message} Inspect destination ${remote} and staging ${staging}; no transfer was retried.`);
     } finally { await source.close(); }
@@ -333,7 +337,10 @@ export async function download(state, remote, local, options = {}) {
   remotePath(remote);
   const destination = resolve(local);
   await mkdir(resolve(destination, ".."), { recursive: true });
-  const target = await open(destination, "wx+", 0o600);
+  if (options.encryptTo && providerId(state.provider) !== "compute-mpp") throw new Error("Encrypted collection requires the SSH transport; no plaintext export was attempted.");
+  const staging = options.encryptTo ? `${destination}.partial-${randomUUID()}` : destination;
+  const target = await open(staging, "wx+", 0o600);
+  let encryption, published = false;
   const script = "import sys,json,hashlib,base64; f=open(sys.argv[1],'rb'); b=f.read(); i=int(sys.argv[2]); print(json.dumps({'size':len(b),'sha256':hashlib.sha256(b).hexdigest(),'data':base64.b64encode(b[i:i+49152]).decode()}))";
   let expected, offset = 0;
   const hash = createHash("sha256");
@@ -347,8 +354,27 @@ export async function download(state, remote, local, options = {}) {
       if (options.expected && (expected.size !== options.expected.size || expected.sha256 !== options.expected.sha256 ||
           !Number.isSafeInteger(options.expected.maximum) || expected.size > options.expected.maximum))
         throw new Error("Remote file differs from the expected digest, size, or byte limit; no export stream started.");
-      const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined, { ...options, outputFd: target.fd });
+      let received = 0;
+      if (options.encryptTo) {
+        encryption = encryptStream(options.encryptTo, target.fd, options);
+        encryption.stream.on("data", (chunk) => { received += chunk.length; hash.update(chunk); });
+      }
+      const result = await execute(state, ["python3", "-c", script, "send", remote, String(expected.size), expected.sha256], operationCap, undefined,
+        { ...options, ...(encryption ? { outputStream: encryption.stream } : { outputFd: target.fd }) });
       if (result.returncode) throw new Error("Export interrupted or file changed.");
+      if (encryption) {
+        await encryption.done;
+        if (received !== expected.size || hash.digest("hex") !== expected.sha256) throw new Error("Encrypted export source changed during transfer.");
+        const actual = await fingerprint(target);
+        await target.sync();
+        await link(staging, destination); // Publish only a complete, verified ciphertext; never overwrite.
+        published = true;
+        await unlink(staging);
+        const parent = await open(resolve(destination, ".."), "r");
+        try { await parent.sync(); } finally { await parent.close(); }
+        return { local: destination, remote, bytes: actual.size, sha256: actual.sha256,
+          encryption: { format: "age", recipient: options.encryptTo } };
+      }
       const actual = await fingerprint(target);
       if (actual.size !== expected.size || actual.sha256 !== expected.sha256) throw new Error("Export digest mismatch.");
       await target.sync();
@@ -374,7 +400,8 @@ export async function download(state, remote, local, options = {}) {
     await target.sync();
     return { local: destination, remote, bytes: offset, sha256: expected.sha256 };
   } catch (error) {
-    throw new Error(`${error.message} Partial output retained at ${destination}; inspect provider status. No termination was requested by this export.`);
+    if (encryption) { encryption.abort(); await encryption.done.catch(() => {}); }
+    throw new Error(`${error.message} ${options.encryptTo ? "Unconfirmed encrypted" : "Partial"} output retained at ${published ? destination : staging}; inspect provider status. No termination was requested by this export.`);
   } finally { await target.close(); }
 }
 

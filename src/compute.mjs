@@ -186,7 +186,7 @@ async function ssh(state, command, options = {}) {
     throw error;
   }
   const result = await runProcess("ssh", [...sshArguments(state), `root@${state.sshHost}`,
-    command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+    command.map(quote).join(" ")], { inputFd: options.inputFd, outputFd: options.outputFd, outputStream: options.outputStream, signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   if (result.code === null || result.code === 255) {
     const error = new Error("SSH outcome unresolved. Inspect the existing job before executing it again.");
     error.observation = {

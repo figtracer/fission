@@ -88,21 +88,23 @@ export async function report(name, id, options = {}) {
     if (item.phase !== "collected") continue;
     const actual = await fingerprint(item.local);
     if (actual.sha256 !== item.sha256 || actual.bytes !== item.bytes) throw new Error("Collected evidence changed before reporting.");
-    const path = `evidence-${evidence.length}`;
+    const path = `evidence-${evidence.length}${item.encryption ? ".age" : ""}`;
     await copyFile(item.local, join(destination, path));
     await chmod(join(destination, path), 0o600);
-    evidence.push({ path, remote: item.remote, ...actual });
+    evidence.push({ path, remote: item.remote, ...actual, ...(item.encryption ? { encryption: item.encryption } : {}) });
   }
   if (state.task) value.evidence = evidence;
   if (options.log) {
     const source = resolve(options.log);
     if (!(await stat(source)).isFile()) throw new Error("Attach a regular local log file.");
-    const path = join(destination, "output.log");
+    const encryption = state.task?.exports?.find((item) => item.local === source)?.encryption;
+    const filename = encryption ? "output.log.age" : "output.log";
+    const path = join(destination, filename);
     await copyFile(source, path);
     await chmod(path, 0o600);
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(path)) hash.update(chunk);
-    value.log = { path: "output.log", bytes: (await stat(path)).size, sha256: hash.digest("hex"), source: "operator-supplied local log" };
+    value.log = { path: filename, ...(encryption ? { encryption } : {}), bytes: (await stat(path)).size, sha256: hash.digest("hex"), source: "operator-supplied local log" };
   }
   const observedSource = job?.observation?.environment?.source;
   const sourceReproducible = !state.source || observedSource?.clean === true && /^[a-f0-9]{40}$/.test(observedSource.commit);
@@ -132,7 +134,7 @@ export async function report(name, id, options = {}) {
     ...evidence.map((item) => `- [${cell(item.remote)}](${item.path}): ${item.bytes} bytes; SHA-256 \`${item.sha256}\`.`),
     ...(state.task?.exports || []).filter((item) => item.phase !== "collected").map((item) => `- ${cell(item.remote)}: ${cell(item.phase)}; ${cell(item.error)}`),
     ...(replayable ? ["- [Portable experiment](experiment.json): review its commands, then request a fresh plan and budget."] : []),
-    ...(value.log ? [`- [Job output](output.log): ${value.log.bytes} bytes; SHA-256 \`${value.log.sha256}\`.`] : []),
+    ...(value.log ? [`- [${value.log.encryption ? "Encrypted job output" : "Job output"}](${value.log.path}): ${value.log.bytes} bytes; SHA-256 \`${value.log.sha256}\`.`] : []),
     ...transactions.map((transaction) => `- [Payment receipt](${transaction.explorer}): ${transaction.paid ?? "unverified"} USDC.e${transaction.workspaces.length > 1 ? " (shared transaction)" : ""}.`),
     "", "Receipt outflow includes fees in that token. Missing receipts, other assets, and later refunds are not inferred.", "",
     ...(value.workspace.providerWarning ? ["Provider history: recorded failure. Read `fission help rental` for context.", ""] : []),
@@ -167,7 +169,7 @@ export async function report(name, id, options = {}) {
       source: state.source ? { ...state.source, commit: observedSource.commit } : null, workload: { commands: job.spec.commands, cwd: job.spec.cwd },
       preparation: "Bootstrap the embedded recipe, then restore or prepare workload inputs explicitly. Remote files and datasets are not embedded.",
       ...(state.task ? { task: savedPlan?.task || null } : {}),
-      files: await Promise.all(["run.json", "run.md", "summary.json", ...evidence.map((item) => item.path), ...(value.log ? ["output.log"] : [])].map(async (file) => ({ path: file, ...await fingerprint(join(destination, file)) }))) };
+      files: await Promise.all(["run.json", "run.md", "summary.json", ...evidence.map((item) => item.path), ...(value.log ? [value.log.path] : [])].map(async (file) => ({ path: file, ...await fingerprint(join(destination, file)) }))) };
     record.digest = digest(record);
     experiment = join(destination, "experiment.json");
     await writeJSON(experiment, record);

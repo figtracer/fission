@@ -15,6 +15,8 @@ Options:
   --machine ID                    Select an exact catalog machine
   --no-resize                     Direct provisioning (required above 4 CPU/8 GiB)
   --input FILE[=/workspace/PATH]   Upload a file; repeatable
+  --secret FILE[=NAME]             SSH file at /workspace/.fission/secrets/NAME
+  --encrypt-to AGE_RECIPIENT       Encrypt collected files and logs with local age
   --artifact /workspace/PATH      Retrieve an output file; repeatable
   --cwd DIR                       Guest working directory (default /workspace)
   --repo URL --ref SHA            Optional public GitHub checkout at a full commit
@@ -30,6 +32,12 @@ Optional preparation contains argv arrays run after inputs arrive. Optional chec
 contain {name, scope: "tools", argv, result: "exit"|"json"}; JSON checks must emit
 {"ready":true}. No application checks are required or inferred. Setup failures
 stop the run. Use scripts or source archives for any repository or toolchain.
+
+Secrets are file references, read once when sent; values stay out of command
+arguments and transfer records. Workloads can still disclose them in output.
+Encrypted collection needs age locally and a native age1 public recipient; the
+private identity is never needed by Fission. Metadata and observations remain
+local plaintext. See docs/privacy.md for recovery and decryption.
 
 For multiple machines, replace task with machines: [{name, ...task}, ...]. Each
 has its own budget and lifetime; --budget bounds the combined allocation.

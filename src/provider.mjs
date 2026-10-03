@@ -1,3 +1,4 @@
+import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, open } from "node:fs/promises";
@@ -82,10 +83,18 @@ export function runProcess(command, args, options = {}) {
     options.signal?.addEventListener("abort", abort, { once: true });
     const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => stop("observation_deadline"), options.timeoutMs);
     const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); };
-    child.stdout?.on("data", (data) => { stdout += data; });
+    const output = options.outputStream ? pipeline(child.stdout, options.outputStream).catch((error) => {
+      stop("output_failed"); return error;
+    }) : null;
+    if (!options.outputStream) child.stdout?.on("data", (data) => { stdout += data; });
     child.stderr.on("data", (data) => { stderr += data; });
     child.on("error", (error) => { cleanup(); reject(error); });
-    child.on("close", (code, signal) => { cleanup(); resolve({ code, signal, stdout, stderr, interruption }); });
+    child.on("close", async (code, signal) => {
+      cleanup();
+      const error = await output;
+      if (error) reject(error);
+      else resolve({ code, signal, stdout, stderr, interruption });
+    });
   });
 }
 
@@ -124,7 +133,7 @@ export async function quote(operation, body, provider = "modal-tempo") {
 
 export async function request(state, operation, body, maximum, id = randomUUID(), options = {}) {
   state.provider = providerId(state.provider);
-  if ((options.inputFd !== undefined || options.outputFd !== undefined) && (state.provider !== "compute-mpp" || operation !== "exec"))
+  if ((options.inputFd !== undefined || options.outputFd !== undefined || options.outputStream !== undefined) && (state.provider !== "compute-mpp" || operation !== "exec"))
     throw new Error("File streams require the VM SSH transport.");
   if (state.provider === "compute-mpp" && operation !== "create")
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
