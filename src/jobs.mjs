@@ -37,6 +37,7 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   const job = { runnerSha256: createHash("sha256").update(runnerBytes).digest("hex"), id, name: state.name, phase: "launch_unknown", requestId: randomUUID(), spec, digest: createHash("sha256").update(JSON.stringify(spec)).digest("hex"), log: `${remotePath(id)}/output.log` };
   await writeJSON(file, job);
   const script = `import sys,json,pathlib,base64,subprocess,os
+os.umask(0o077)
 p=pathlib.Path(sys.argv[1]); p.mkdir(parents=True,exist_ok=False)
 os.chmod(p,0o700)
 (p/'spec.json').write_text(sys.argv[2])

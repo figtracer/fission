@@ -28,4 +28,4 @@ Use `fission help` to explore commands and `fission help code` for short jobs.
 
 [Installation](docs/install.md) · [Agent skill](skills/fission/SKILL.md) ·
 [Compute options](docs/compute.md) · [Tasks](docs/tasks.md) ·
-[Budgets and recovery](docs/rental.md)
+[Budgets and recovery](docs/rental.md) · [Privacy](docs/privacy.md)

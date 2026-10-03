@@ -9,6 +9,10 @@ import subprocess
 import sys
 import time
 
+# New job files and child-created outputs are owner-only by default. A user
+# command can explicitly choose a different umask when sharing is intentional.
+os.umask(0o077)
+
 root = pathlib.Path(sys.argv[1])
 spec = json.loads((root / "spec.json").read_text())
 deadline = spec["deadline"]

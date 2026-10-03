@@ -249,7 +249,7 @@ export async function taskStatus(name, expectedExperiment) {
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
     cleanup: { phase: state.phase, confirmed: terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || null },
-    report: task.report?.report || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
+    report: task.report?.report || null, summary: task.report?.summary || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
 export async function resumeTask(name) {

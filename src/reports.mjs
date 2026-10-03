@@ -1,4 +1,4 @@
-import { mkdir, readFile, copyFile, stat, open, readdir } from "node:fs/promises";
+import { mkdir, readFile, copyFile, chmod, stat, open, readdir } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -80,7 +80,7 @@ export async function report(name, id, options = {}) {
     cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
   };
   const parent = resolve(options.output || "fission", name);
-  await mkdir(parent, { recursive: true });
+  await mkdir(parent, { recursive: true, mode: 0o700 });
   const destination = join(parent, generatedAt.replaceAll(":", "-") + "-" + (id || "run"));
   await mkdir(destination, { mode: 0o700 });
   const evidence = [];
@@ -90,6 +90,7 @@ export async function report(name, id, options = {}) {
     if (actual.sha256 !== item.sha256 || actual.bytes !== item.bytes) throw new Error("Collected evidence changed before reporting.");
     const path = `evidence-${evidence.length}`;
     await copyFile(item.local, join(destination, path));
+    await chmod(join(destination, path), 0o600);
     evidence.push({ path, remote: item.remote, ...actual });
   }
   if (state.task) value.evidence = evidence;
@@ -98,6 +99,7 @@ export async function report(name, id, options = {}) {
     if (!(await stat(source)).isFile()) throw new Error("Attach a regular local log file.");
     const path = join(destination, "output.log");
     await copyFile(source, path);
+    await chmod(path, 0o600);
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(path)) hash.update(chunk);
     value.log = { path: "output.log", bytes: (await stat(path)).size, sha256: hash.digest("hex"), source: "operator-supplied local log" };
@@ -125,7 +127,8 @@ export async function report(name, id, options = {}) {
     "## Environment", "", code({ requirements: value.workspace.requirements, observedResources: value.workspace.resources, source: value.workspace.source, runEnvironment: value.run?.environment }), "",
     "## Commands", "", value.run?.commands ? code(value.run.commands) : "Preparation or workspace-level report; the structured record identifies the recipe and run digest.", "",
     ...(measurements.length ? ["## Measurements", "", code(measurements), ""] : []),
-    "## Evidence", "", "- [Structured record](run.json)",
+    "## Evidence", "", "- [Minimal summary](summary.json): outcome, duration, spending and cleanup only.",
+    "- [Detailed local record](run.json): review commands, paths and metadata before sharing.",
     ...evidence.map((item) => `- [${cell(item.remote)}](${item.path}): ${item.bytes} bytes; SHA-256 \`${item.sha256}\`.`),
     ...(state.task?.exports || []).filter((item) => item.phase !== "collected").map((item) => `- ${cell(item.remote)}: ${cell(item.phase)}; ${cell(item.error)}`),
     ...(replayable ? ["- [Portable experiment](experiment.json): review its commands, then request a fresh plan and budget."] : []),
@@ -134,6 +137,25 @@ export async function report(name, id, options = {}) {
     "", "Receipt outflow includes fees in that token. Missing receipts, other assets, and later refunds are not inferred.", "",
     ...(value.workspace.providerWarning ? ["Provider history: recorded failure. Read `fission help rental` for context.", ""] : []),
   ].join("\n");
+  // Build from an allowlist, never by deleting fields from the detailed record.
+  // Free text, identifiers, command hashes and timestamps can reveal a workload.
+  const outcome = state.task?.outcome ?? job?.phase;
+  let allocation = null;
+  try { allocation = amount(units(value.spending.allocation)); } catch { /* Unknown or malformed amounts stay unknown. */ }
+  const minimal = {
+    schemaVersion: 1, kind: "fission-result-summary",
+    outcome: ["succeeded", "failed", "cancelled", "timed_out", "preparation_failed", "deadline_exceeded", "workspace_terminated", "not_purchased", "interrupted", "closed"].includes(outcome) ? outcome : "unknown",
+    durationSeconds: Number.isFinite(value.run?.durationSeconds) ? value.run.durationSeconds : null,
+    exitCode: Number.isSafeInteger(value.run?.exitCode) ? value.run.exitCode : null,
+    spending: {
+      currency: "USDC.e",
+      allocation,
+      verifiedOutflow: value.spending.verifiedOutflow,
+      incomplete: value.spending.incomplete,
+    },
+    cleanup: { confirmed: value.cleanup.confirmed },
+  };
+  await writeJSON(join(destination, "summary.json"), minimal);
   await writeJSON(join(destination, "run.json"), value);
   const path = join(destination, "run.md");
   const file = await open(path, "wx", 0o600);
@@ -145,10 +167,10 @@ export async function report(name, id, options = {}) {
       source: state.source ? { ...state.source, commit: observedSource.commit } : null, workload: { commands: job.spec.commands, cwd: job.spec.cwd },
       preparation: "Bootstrap the embedded recipe, then restore or prepare workload inputs explicitly. Remote files and datasets are not embedded.",
       ...(state.task ? { task: savedPlan?.task || null } : {}),
-      files: await Promise.all(["run.json", "run.md", ...evidence.map((item) => item.path), ...(value.log ? ["output.log"] : [])].map(async (file) => ({ path: file, ...await fingerprint(join(destination, file)) }))) };
+      files: await Promise.all(["run.json", "run.md", "summary.json", ...evidence.map((item) => item.path), ...(value.log ? ["output.log"] : [])].map(async (file) => ({ path: file, ...await fingerprint(join(destination, file)) }))) };
     record.digest = digest(record);
     experiment = join(destination, "experiment.json");
     await writeJSON(experiment, record);
   }
-  return { experiment, report: path, record: join(destination, "run.json"), generatedAt, phase: job?.phase || state.phase, machinePhase: state.phase };
+  return { experiment, summary: join(destination, "summary.json"), report: path, record: join(destination, "run.json"), generatedAt, phase: job?.phase || state.phase, machinePhase: state.phase };
 }

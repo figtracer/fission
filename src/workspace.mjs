@@ -318,7 +318,7 @@ export async function upload(state, local, remote, options = {}) {
   // headers also carry request data.
   const chunkBytes = 4 * 1024;
   const temp = remote + ".fission-" + randomUUID();
-  const script = "import sys,base64,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
+  const script = "import sys,base64,pathlib,os; os.umask(0o077); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
   for (let offset = 0; offset < Math.max(bytes.length, 1); offset += chunkBytes) {
     const result = await execute(state, ["python3", "-c", script, temp, offset ? "ab" : "xb", bytes.subarray(offset, offset + chunkBytes).toString("base64")], operationCap);
     if (result.returncode) throw new Error("Upload interrupted; remote staging file retained. No command was retried.");

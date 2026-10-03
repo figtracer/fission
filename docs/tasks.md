@@ -56,8 +56,11 @@ supplied by the user or their agent. Extend preparation and work allowances for
 long operations; the budget never grows automatically.
 
 Results include command exit status, logs, requested artifacts, spending and
-cleanup status. A successful exit does not independently prove application
-correctness. Failed setup or work still triggers cleanup. Unknown deletion is
+cleanup status. Each new report also has a minimal `summary.json` for sharing
+outcome, duration, spending and cleanup without the detailed record. `status`
+returns its path. Review only that file before sharing; the surrounding directory
+contains private workflow details. See [privacy](privacy.md). A successful exit
+does not independently prove application correctness. Failed setup or work still triggers cleanup. Unknown deletion is
 never confirmed destruction. See [rental recovery](rental.md).
 
 ## Older task files
