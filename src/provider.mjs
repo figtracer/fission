@@ -12,6 +12,48 @@ const endpoint = "https://modal.mpp.tempo.xyz/sandbox/";
 const tempo = process.env.FISSION_TEMPO || process.env.LOANER_TEMPO || join(homedir(), ".tempo/bin/tempo");
 
 export const money = units;
+
+// Modal GPU types accepted by --gpu. The gateway prices unknown names instead of
+// rejecting them, so names are checked here and the guest is checked after purchase.
+// Memory floors are MiB as reported by nvidia-smi; the A100 types differ only by memory.
+const gpuModels = {
+  T4: { pattern: /\bT4\b/, minMiB: 15000 },
+  L4: { pattern: /\bL4\b/, minMiB: 22000 },
+  A10G: { pattern: /\bA10G\b/, minMiB: 22000 },
+  L40S: { pattern: /\bL40S\b/, minMiB: 45000 },
+  "A100-40GB": { pattern: /\bA100\b/, minMiB: 39000, maxMiB: 60000 },
+  "A100-80GB": { pattern: /\bA100\b/, minMiB: 79000 },
+  H100: { pattern: /\bH100\b/, minMiB: 79000 },
+  H200: { pattern: /\bH200\b/, minMiB: 139000 },
+  B200: { pattern: /\bB200\b/, minMiB: 178000 },
+};
+
+export function gpuSpec(value) {
+  const match = /^([A-Z0-9-]+)(?::([1-8]))?$/.exec(value || "");
+  if (!match || !Object.hasOwn(gpuModels, match[1]))
+    throw new Error(`--gpu must be one of ${Object.keys(gpuModels).join(", ")}, optionally with :COUNT (1-8), such as H100 or A100-80GB:2.`);
+  return { model: match[1], count: Number(match[2] || 1) };
+}
+
+// Checks one nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits result.
+export function verifyGpu(value, result) {
+  const { model, count } = gpuSpec(value), expected = gpuModels[model];
+  const lines = typeof result?.stdout === "string" ? result.stdout.trim().split("\n").filter(Boolean) : [];
+  const devices = lines.map((line) => {
+    const [name, memory] = line.split(",").map((part) => part.trim());
+    return { name, memoryMiB: Number(memory) };
+  });
+  const problems = [];
+  if (result?.returncode !== 0) problems.push(`nvidia-smi exited ${result?.returncode}`);
+  if (devices.length !== count) problems.push(`expected ${count} GPU(s), observed ${devices.length}`);
+  for (const device of devices)
+    if (!device.name || !expected.pattern.test(device.name) || !Number.isFinite(device.memoryMiB) ||
+        device.memoryMiB < expected.minMiB || (expected.maxMiB && device.memoryMiB >= expected.maxMiB))
+      problems.push(`${device.name || "unnamed device"} with ${device.memoryMiB} MiB does not match ${model}`);
+  return { requested: value, devices, verified: problems.length === 0, problems,
+    stderr: typeof result?.stderr === "string" ? result.stderr.slice(0, 2048) : "", observedAt: new Date().toISOString() };
+}
+
 export const paymentTerms = { chainId: 4217, token: "0x20c000000000000000000000b9537d11c60e8b50", currency: "USDC.e" };
 const paymentOptions = ["--payment-intent", "charge", "--payment-token", paymentTerms.token, "--network", "tempo"];
 

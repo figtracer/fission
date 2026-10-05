@@ -25,6 +25,7 @@ function summary(state) {
     remoteStatus: state.remoteStatus, providerStatus: state.providerStatus, resizePending: state.resizePending, observedResources: state.observedResources, exportedTo: state.exportedTo,
     lease: state.lease, leasePhase: state.leasePhase, preparationAcceptance: state.preparationAcceptance,
     accessObservations: state.accessObservations, initialization: state.initialization, guestResources: state.guestResources,
+    gpu: state.body?.gpu, guestGpu: state.guestGpu, preparationError: state.preparationError,
     creationQuote: state.creationQuote, creationCap: state.creationCap,
     totalCap: state.totalCap, bootstrapJob: state.bootstrapJob, repairJob: state.repairJob, source: state.source, planId: state.id,
     ...(state.cacheHost ? { cacheHost: state.cacheHost } : {}),
@@ -73,7 +74,7 @@ async function main() {
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
     "no-resize": { type: "boolean" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
-    provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" },
+    provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" }, gpu: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },
     "raise-to": { type: "string" }, approval: { type: "string" },
     "storage-dir": { type: "string" },
@@ -98,7 +99,7 @@ async function main() {
     throw new Error(`Use fission advanced ${command} for low-level recovery; fission help shows the managed workflow.`);
   const allowed = {
     controller: [], install: ["output"], skill: ["output"], guide: [], report: ["log", "notes", "measurements", "output"], capabilities: [], help: [], ui: [], tmux: [], ssh: ["tmux"], spending: ["refresh"], machines: ["profile", "region", "duration", "max-spend", "cpu", "memory", "disk", "os", "arch", "kind"], budget: ["total-spend", "approve", "vm-max-spend", "profile", "raise-to", "approval"],
-    plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest"],
+    plan: ["from", "recipe", "duration", "max-spend", "total-spend", "profile", "os", "arch", "kind", "cpu", "memory", "disk", "repo", "ref", "provider", "machine", "region", "budget", "cheapest", "gpu"],
     open: ["plan", "approve"], stop: [], supervise: [],
     prepare: ["duration"], repair: ["duration", "approve"], recipes: [], list: [], status: ["refresh"],
     dataset: ["storage-dir", "max-bytes", "duration", "from"], storage: ["storage-dir", "max-bytes"], cache: ["max-bytes", "storage-dir", "cache-workspace"], check: ["scope", "duration", "max-head-age"], jobs: [], run: ["duration", "from"], campaign: ["output"], job: ["refresh"], wait: ["duration", "max-spend"],

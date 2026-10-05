@@ -3,7 +3,7 @@ import { mkdir, readFile, access } from "node:fs/promises";
 import { randomUUID, createHash } from "node:crypto";
 import { root, directory, readJSON, writeJSON, providerId } from "./state.mjs";
 import { recipe, duration, start, sourceRecipes } from "./workspace.mjs";
-import { quote, money, runProcess, paymentTerms, providerWarning } from "./provider.mjs";
+import { quote, money, runProcess, paymentTerms, providerWarning, gpuSpec } from "./provider.mjs";
 import { catalog, machineCapabilities, quotePublicKey } from "./compute.mjs";
 import { amount, vmCeiling } from "./budget.mjs";
 
@@ -23,7 +23,7 @@ export const providers = [{
   price: "Dynamic creation + $0.0001 per lifecycle call", payment: "MPP tempo.charge",
   capabilities: { os: "linux", kind: "sandbox", architecture: null, cpu: null, memoryGiB: null, diskGiB: null, p2p: false, customImage: false, expiry: true },
   evidence: "https://modal.mpp.tempo.xyz",
-  limitations: "Gateway exposes timeout only; no resource reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
+  limitations: "Gateway accepts a timeout and an optional Modal GPU type (advanced plan --gpu). It prices unknown GPU names instead of rejecting them, so Fission accepts only listed types and checks nvidia-smi on the sandbox before bootstrap. No CPU/memory reservation, architecture selection, P2P ports, or image selection. Runtime recipes are opportunistic.",
 }, {
   id: "compute-mpp", available: true, gateway: "x402layer", operator: "Vultr / DigitalOcean",
   price: "Live per-plan VM prices; quote before purchase",
@@ -263,12 +263,19 @@ export async function createPlan(name, options, task) {
     if (!options.repo || !options.ref) throw new Error("Source recipes require a public --repo and exact --ref commit.");
     options.profile = recipeName;
   }
+  if (options.gpu !== undefined) {
+    gpuSpec(options.gpu);
+    if ((options.provider && options.provider !== "modal-tempo") || options.machine || options.region || options.cheapest)
+      throw new Error("--gpu selects a Modal sandbox; use it with --provider modal-tempo and without --machine, --region or --cheapest.");
+  }
+  // A GPU sandbox pays for one nvidia-smi check before its bootstrap launch.
+  const headroom = options.gpu === undefined ? minimumHeadroom : minimumHeadroom + 100n;
   if (options.budget !== undefined) {
     if (options["max-spend"] !== undefined || options["total-spend"] !== undefined)
       throw new Error("Use --budget alone, or separate --max-spend and --total-spend caps.");
-    if (money(options.budget) <= minimumHeadroom) throw new Error("Budget must leave room for creation and 0.0003 in lifecycle allocation.");
+    if (money(options.budget) <= headroom) throw new Error(`Budget must leave room for creation and ${amount(headroom)} in lifecycle allocation.`);
     options["total-spend"] = options.budget;
-    options["max-spend"] = amount(money(options.budget) - minimumHeadroom);
+    options["max-spend"] = amount(money(options.budget) - headroom);
   }
   let selection, machines, alternatives = [];
   if (options.cheapest) {
@@ -317,8 +324,8 @@ export async function createPlan(name, options, task) {
   const timeout = duration(options.duration);
   const totalCap = options["total-spend"];
   let creationCap = options["max-spend"];
-  if (money(creationCap) <= 0n || money(totalCap) < money(creationCap) + minimumHeadroom)
-    throw new Error("Set --total-spend above the creation cap, leaving at least a launch and two shutdown calls (0.0003).");
+  if (money(creationCap) <= 0n || money(totalCap) < money(creationCap) + headroom)
+    throw new Error(`Set --total-spend above the creation cap, leaving at least ${options.gpu === undefined ? "a launch and two shutdown calls" : "a GPU check, a launch and two shutdown calls"} (${amount(headroom)}).`);
   if (machine) {
     const cap = await vmCeiling(profile);
     if (cap !== null && money(totalCap) > money(cap)) throw new Error("Workspace allocation exceeds the configured VM ceiling.");
@@ -331,7 +338,7 @@ export async function createPlan(name, options, task) {
     source = { url: options.repo, commit: options.ref };
   }
   if (definition.afterCheckout?.length && !source) throw new Error("afterCheckout requires a public --repo and exact --ref commit.");
-  let body = { timeout };
+  let body = { timeout, ...(options.gpu === undefined ? {} : { gpu: options.gpu }) };
   if (machine) {
     await mkdir(directory(name), { recursive: true, mode: 0o700 });
     const key = join(directory(name), "id_ed25519");

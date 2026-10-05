@@ -4,7 +4,7 @@ import { join, resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { directory, load, save, readJSON, locked, providerId } from "./state.mjs";
-import { request, recoverCreate, execute, validRemoteId, CreateNotPurchased } from "./provider.mjs";
+import { request, recoverCreate, execute, validRemoteId, CreateNotPurchased, verifyGpu } from "./provider.mjs";
 import { hasTerminationReservation, BudgetRejected } from "./budget.mjs";
 
 // Published gateway price for exec, status, and terminate; reject a higher charge.
@@ -129,6 +129,29 @@ async function prepareState(state) {
       await compute.verifyInitialization(state, "direct", { deadline });
       await compute.verifyGuest(state, { deadline });
     }
+  }
+  if (state.provider === "modal-tempo" && state.body?.gpu && !state.guestGpu) {
+    // One paid nvidia-smi check before bootstrap. Its request ID is saved first, so
+    // an interrupted check is read back from its saved response, never paid again.
+    state.gpuCheckRequest ??= randomUUID();
+    await save(state);
+    const requests = join(directory(state.name), "requests");
+    let result;
+    if (await readJSON(join(requests, `${state.gpuCheckRequest}.json`))) {
+      try { result = JSON.parse(await readFile(join(requests, `${state.gpuCheckRequest}.response.json`), "utf8")); }
+      catch { /* An empty or partial response leaves the check unresolved. */ }
+      if (!Number.isInteger(result?.returncode))
+        throw new Error(`GPU check request ${state.gpuCheckRequest} is unresolved; inspect ${requests}. It is not repeated.`);
+    } else result = await execute(state, ["sh", "-c", "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits"],
+      operationCap, state.gpuCheckRequest, { deadline });
+    state.guestGpu = verifyGpu(state.body.gpu, result);
+    if (!state.guestGpu.verified) {
+      state.phase = "prepare_failed";
+      state.preparationError = `GPU check failed: ${state.guestGpu.problems.join("; ")}. No bootstrap launched; close with advanced close ${state.name} --discard-output.`;
+      await save(state);
+      return state;
+    }
+    await save(state);
   }
   const { launch } = await import("./jobs.mjs");
   const commands = [...state.recipe.prepare];

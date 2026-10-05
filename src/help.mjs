@@ -87,7 +87,7 @@ Read fission help rental for accounting and recovery details.`;
 // Recovery syntax shares the actual low-level implementations, not a second
 // lifecycle. Detailed policy belongs in the guides rather than a duplicate index.
 const advanced = {
-  plan: "NAME --recipe RECIPE --budget AMOUNT --duration DURATION --cheapest --region REGION [--repo URL --ref SHA] [--cpu N --memory GiB --disk GiB]",
+  plan: "NAME --recipe RECIPE --budget AMOUNT --duration DURATION --cheapest --region REGION [--repo URL --ref SHA] [--cpu N --memory GiB --disk GiB]\n       fission advanced plan NAME --provider modal-tempo --gpu TYPE[:COUNT] --budget AMOUNT --duration DURATION\n\nGPU sandboxes use Modal: T4, L4, A10G, L40S, A100-40GB, A100-80GB, H100, H200 or B200,\noptionally :COUNT (1-8). After purchase one nvidia-smi check must match before bootstrap;\na mismatch leaves the sandbox prepare_failed. Close it with close NAME --discard-output.",
   open: "NAME --plan PLAN_ID --approve",
   prepare: "NAME [--duration DURATION]",
   repair: "NAME --duration DURATION --approve",

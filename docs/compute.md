@@ -53,9 +53,26 @@ outflow are distinct from the quoted service charge.
 | Option | Workload | Integration |
 | --- | --- | --- |
 | Compute gateway / Vultr and DigitalOcean | Linux VMs and prepared environments | Managed rentals and tasks |
-| Modal | Sandboxes | Existing sandbox interface |
+| Modal | Sandboxes, optionally with a GPU | Advanced sandbox interface; see GPU sandboxes |
 | Judge0 / Locus MPP | Short code execution | `run --from`, `status`, local results |
 | Build With Locus | ARM64 container services and databases | Discovery; recurring credit billing needs separate lifecycle support |
+
+## GPU sandboxes
+
+Modal sandboxes can attach a GPU. Plan one with
+`fission advanced plan NAME --provider modal-tempo --gpu H100 --duration 1h --budget 5`,
+inspect the quote, then `fission advanced open NAME --plan ID --approve`. Use
+`advanced exec`, `run` and `job` for work and `advanced close NAME` when done.
+Accepted types are T4, L4, A10G, L40S, A100-40GB, A100-80GB, H100, H200 and B200,
+optionally with `:COUNT` (1-8). This is a sandbox, not an SSH VM, and managed
+`run`/`rent` do not use it: each command, status check and job poll is a paid call.
+
+The gateway prices any GPU name it receives, including names Modal does not
+offer, so a quote is not proof of the hardware. After purchase Fission runs
+`nvidia-smi` once and requires the requested count, model and memory before its
+bootstrap starts. A mismatch leaves the sandbox `prepare_failed` with the
+observation in `guestGpu`; close it with `--discard-output`. The budget keeps
+0.0001 more lifecycle room for that check.
 
 Locus's [billing guide](https://buildwithlocus.com/billing.md) specifies $1.50 per
 service/month for MPP-funded workspaces (checked October 2, 2026). This differs
