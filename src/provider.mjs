@@ -138,10 +138,11 @@ function requestURL(provider, operation) {
   throw new Error(`Unsupported ${provider} operation ${operation}; no request submitted.`);
 }
 
-export async function quote(operation, body, provider = "modal-tempo") {
+export async function quote(operation, body, provider = "modal-tempo", state) {
   provider = providerId(provider);
-  const url = requestURL(provider, provider === "compute-mpp" ? "create" : operation);
-  const result = await runProcess(tempo, ["request", ...paymentOptions, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url], { timeoutMs: 60000 });
+  const { url, headers = [] } = operation === "extend"
+    ? await (await import("./compute.mjs")).extensionEndpoint(state) : { url: requestURL(provider, operation) };
+  const result = await runProcess(tempo, ["request", ...paymentOptions, ...headers, "--dry-run", "--retries", "0", "-m", "60", "-X", "POST", "--json", JSON.stringify(body), url], { timeoutMs: 60000 });
   if (result.code !== 0) {
     let detail = "";
     try {
@@ -168,9 +169,10 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   state.provider = providerId(state.provider);
   if ((options.inputFd !== undefined || options.outputFd !== undefined) && (state.provider !== "compute-mpp" || operation !== "exec"))
     throw new Error("File streams require the VM SSH transport.");
-  if (state.provider === "compute-mpp" && operation !== "create")
+  if (state.provider === "compute-mpp" && !["create", "extend"].includes(operation))
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
-  const url = requestURL(state.provider, operation);
+  const { url, headers = [] } = operation === "extend"
+    ? await (await import("./compute.mjs")).extensionEndpoint(state) : { url: requestURL(state.provider, operation) };
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
   const responsePath = join(dir, `${id}.response.json`);
@@ -178,12 +180,23 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   if (await readJSON(intent)) throw new Error(`Request ${id} already exists. Reconcile it; do not pay again.`);
   if (operation === "create" && providerWarning(state.provider))
     console.error(`⚠ Provider history: ${providerWarning(state.provider)}`);
+  if (options.deadline !== undefined && Date.now() >= options.deadline) {
+    const error = new Error("Request deadline passed; no request dispatched.");
+    error.notDispatched = true;
+    throw error;
+  }
   await reserve(state, operation, maximum, id);
   await writeJSON(intent, { id, operation, body, maximum, submittedAt: new Date().toISOString(), state: "submitting" });
   for (const path of [responsePath, metaPath]) {
     const file = await open(path, "wx", 0o600); await file.close();
   }
-  const result = await runProcess(tempo, ["request", ...paymentOptions, "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
+  if (options.deadline !== undefined && Date.now() >= options.deadline) {
+    await writeJSON(intent, { id, operation, body, maximum, state: "not_dispatched", finishedAt: new Date().toISOString() });
+    const error = new Error("Request deadline passed while recording intent; no request dispatched.");
+    error.notDispatched = true;
+    throw error;
+  }
+  const result = await runProcess(tempo, ["request", ...paymentOptions, ...headers, "--max-spend", maximum, "--retries", "0", "-m", "180", "-X", "POST", "--json", JSON.stringify(body), "-o", responsePath, "--write-meta", metaPath, url], { signal: options.signal, timeoutMs: Math.max(1, Math.min(180000, (options.deadline || Infinity) - Date.now())) });
   const responseText = await readFile(responsePath, "utf8");
   const metaText = await readFile(metaPath, "utf8");
   let response;
@@ -201,7 +214,7 @@ export async function request(state, operation, body, maximum, id = randomUUID()
     await recordProviderFailure(state.provider);
     throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
   }
-  if (state.provider === "compute-mpp") {
+  if (state.provider === "compute-mpp" && operation === "create") {
     const { adopt } = await import("./compute.mjs");
     return { sandbox_id: await adopt(state, response) };
   }

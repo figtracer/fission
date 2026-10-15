@@ -10,7 +10,7 @@ Fission selects the cheapest compatible quote in the requested region while pres
 
 For a task that must bypass starter migration, `fission run --no-resize` buys the selected VM directly for at least one prepaid day while retaining the requested shorter TOTAL, guest deadline, and early cleanup. Every fallback candidate remains direct. During public alpha, automatic starter resizing is limited to selected targets with at most 4 vCPU and 8 GiB nominal RAM; larger short tasks require `--no-resize`. This qualification boundary is not a provider limit, a reliability guarantee for smaller machines, evidence that direct provisioning will succeed, or evidence that unused provider credit is refundable.
 
-Automatic plans retain compatible alternatives from the same quoted shortlist in ascending quote order. Failed final quotes or changed capacity can select another retained candidate **before purchase intent**, up to the approved task creation cap (budget minus lifecycle headroom). There is no percentage premium rule. Every candidate preserves the requested region, duration and resource floors, and is revalidated before payment. Explicit `--machine` plans and older plans without alternatives remain exact. A new invocation quotes afresh; an existing plan never gains unapproved alternatives. Once creation intent exists, errors are observed rather than used to buy a replacement.
+Automatic plans retain compatible alternatives from the same quoted shortlist in ascending quote order. Failed final quotes or changed capacity can select another retained candidate **before purchase intent**, up to the approved task creation cap (budget minus lifecycle headroom). There is no percentage premium rule. Every candidate preserves the requested region scope, duration and resource floors, and is revalidated before payment. Explicit `--machine` plans and older plans without alternatives remain exact. A new invocation quotes afresh; an existing plan never gains unapproved alternatives. Once creation intent exists, errors are observed rather than used to buy a replacement.
 
 Every request, allocation, and ambiguous outcome remains in `FISSION_HOME`. Never reset history or submit a replacement because a command failed. Keep wallet/SSH credentials and runtime state outside source and reports.
 
@@ -24,7 +24,7 @@ VM readiness, catalog refresh, guest verification, and bootstrap share the task'
 
 The gateway acknowledges that resize started but exposes neither Vultr's upgrade-job identifier nor a job-status or reboot action. Provider plan fields, `active`, `ok`, and `resize_pending: false` therefore do not prove migration completed. Fission submits one resize and accepts convergence only from the same host-key-pinned guest; otherwise it reports an unfinished/failing preparation and preserves cleanup time. Evidence setup/collection failure is reported separately and must not suppress an otherwise possible cleanup attempt.
 
-Before tools start, bootstrap arms a guest systemd timer to initiate poweroff at the full task deadline if the local owner is unavailable. This is a safety net for a trusted root workload, not a sandbox boundary or exact shutdown-time guarantee. A guest reboot or root command can remove the transient timer. Guest poweroff is not provider destruction: the local owner still requests and confirms deletion on resume.
+Before tools start on a VM, bootstrap arms a guest systemd timer to initiate poweroff at the full task deadline if the local owner is unavailable. This is a safety net for a trusted root workload, not a sandbox boundary or exact shutdown-time guarantee. A guest reboot or root command can remove the transient timer. Guest poweroff is not provider destruction: the local owner still requests and confirms deletion on resume.
 
 Final status/report should show outcome, jobs, evidence, observed spending or uncertainty, report path, and cleanup confirmation. A passing process does not by itself establish the experiment's claim. Resuming after the collection cutoff can lose guest outputs: each unattempted export is recorded as `not_collected` with its cutoff reason, independently of the job outcome. Fission does not extend the rental or invent a local file to recover it.
 
@@ -39,3 +39,27 @@ If the follow-up deletion observation remains unconfirmed, the supervisor writes
 VM purchases use MPP through the configured compute gateway; machine alternatives from that gateway are not independent-provider failover. Catalog reads and dry-run quotes are bounded, preview uses one complete snapshot, and purchase revalidates against a fresh snapshot.
 
 A provider is usable only when the same payment identity and ownership route support create, SSH, status, and terminate with bounded full cost and recoverable request identity. Discovery alone is not support. Never treat provider expiry, guest shutdown, or a missing response as confirmed destruction.
+
+## Regions and extensions
+
+Use an exact provider region, `--region europe`, or `--region anywhere`. Broad
+selection compares a shortlist across matching regions. Each quoted candidate
+retains its actual region through purchase; the selection never widens later.
+DigitalOcean and Vultr still share one gateway.
+
+`fission extend NAME --duration 24h --budget 1` previews another day on a ready
+SSH rental. The budget is additional allocation, bounded by the retained aggregate
+and VM ceilings. Add `--approve` within the user's authorization. Provider prepaid
+time rounds up to hours; the new local cutoff adds exactly the requested duration.
+A quote is required, and early cleanup still does not imply a refund.
+
+The extension keeps one payment intent. Fission confirms the provider expiry and
+rearms the guest shutdown timer before updating the local deadline. If interrupted,
+use `extend NAME --resume` to reconcile that intent without another payment.
+An unresolved extension keeps the old local cutoff and its financial reservation.
+Extend before cleanup starts; stopped rentals cannot be reopened.
+
+Managed Modal jobs use the provider timeout instead of systemd. If termination is
+acknowledged while status still says running, Fission observes within the existing
+cleanup allowance and budget. A failed observation remains unconfirmed and needs
+`status NAME --resume`. Acknowledgement alone is never proof of destruction.

@@ -128,7 +128,7 @@ export async function reserve(state, operation, maximum, id) {
     const used = Object.values(ledger.requests).filter((item) => item.name === state.name).reduce((sum, item) => sum + units(item.maximum), 0n);
     const closing = Object.values(ledger.requests).some((item) => item.name === state.name && item.operation === "terminate");
     const reserveForClose = state.kind === "code-execution" || operation === "terminate" || (operation === "status" && closing) ? 0n : terminationReserve;
-    if (used + units(maximum) + reserveForClose > units(cap)) throw new Error("Workspace budget exhausted; termination reserve is protected.");
+    if (used + units(maximum) + reserveForClose > units(cap)) throw new BudgetRejected("Workspace budget exhausted; termination reserve is protected.");
     ledger.requests[id] = { name: state.name, operation, maximum, reservedAt: new Date().toISOString() };
     await writeJSON(path, ledger);
   }, 5000);
@@ -155,5 +155,30 @@ export async function releaseRejectedCreate(state, id, resolution) {
     ledger.releasedAllocations[state.name] = { amount: allocation, requestId: id, recordedAt: resolution.recordedAt };
     delete ledger.allocations[state.name];
     await writeJSON(path, ledger);
+  }, 5000);
+}
+
+// The extension intent owns this increase. Reconciliation can repeat this local
+// step after a crash, but can neither reset history nor add the allocation twice.
+export async function allocateExtension(state, extension) {
+  return lock(async () => {
+    const ledger = await readJSON(path);
+    const before = extension.previousCap, after = amount(units(before) + units(extension.budget));
+    const recorded = ledger?.extensions?.[extension.id];
+    if (recorded) {
+      if (recorded.name !== state.name || recorded.before !== before || recorded.after !== after || ledger.allocations[state.name] !== after)
+        throw new Error("Extension allocation changed; inspect the retained ledger.");
+      return after;
+    }
+    if (!ledger || ledger.allocations[state.name] !== before) throw new Error("Rental allocation differs from the saved extension.");
+    const cap = ceiling(ledger, state.profile);
+    if (cap !== null && units(after) > units(cap)) throw new BudgetRejected("Extended rental exceeds the VM ceiling.");
+    const allocated = Object.values(ledger.allocations).reduce((sum, value) => sum + units(value), 0n);
+    if (allocated + units(extension.budget) > units(ledger.limit)) throw new BudgetRejected("Aggregate budget cannot cover this extension.");
+    ledger.extensions ??= {};
+    ledger.extensions[extension.id] = { name: state.name, before, after, recordedAt: new Date().toISOString() };
+    ledger.allocations[state.name] = after;
+    await writeJSON(path, ledger);
+    return after;
   }, 5000);
 }

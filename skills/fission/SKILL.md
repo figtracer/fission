@@ -35,12 +35,19 @@ fission run NAME --from task.json --budget AMOUNT
 Preview pays nothing. Inspect resources, fresh quote, deadlines, provider warnings
 and retained authorization. Repeat with `--approve` only within user authorization.
 Use `fission help tasks` for uploads, setup, checks and multi-machine task files.
+Use `--region europe` or `--region anywhere` when the user permits broader
+selection. For GPU work, use `run --gpu TYPE[:COUNT]` without a VM region. Use
+`--provider modal-tempo` for a CPU sandbox. Sandbox commands, polls and transfers
+share the task budget; they do not provide SSH or guaranteed CPU/RAM/disk sizes.
 Use `fission help code` for source-file jobs without a VM where suitable.
 
 TOTAL includes provisioning, preparation, execution and cleanup. Preparation is
 configurable; measured timings from another task are not guarantees. Large direct
 machines may require one prepaid day even for short work. Do not silently extend
-a budget or deadline. There is no automatic replacement after ambiguous creation.
+a budget or deadline. For an explicitly requested longer SSH rental, preview
+`fission extend NAME --duration ADDITIONAL --budget ADDITIONAL`; approve within
+that authorization. Use `extend NAME --resume` after an uncertain response; never
+repay it. There is no automatic replacement after ambiguous creation.
 
 ## Always-on work
 

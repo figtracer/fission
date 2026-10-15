@@ -4,7 +4,7 @@ import { recipe, duration, validateRecipe } from "./workspace.mjs";
 import { fingerprint } from "./experiments.mjs";
 
 // The same generic contract serves CLI commands, task files and machine groups.
-export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "artifact", "output"];
+export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "provider", "gpu", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "artifact", "output"];
 export const taskFileOptions = [...taskOptions, "recipe", "preparation", "checks", "context", "kind"];
 
 export async function taskSpec(options, command) {
@@ -12,6 +12,10 @@ export async function taskSpec(options, command) {
     throw new Error("Unsupported task option. Supply your setup and commands; use fission help run.");
   if (options.kind !== undefined && !["run", "rental"].includes(options.kind)) throw new Error("Task kind must be run or rental.");
   const rental = options.kind === "rental";
+  if (options.provider !== undefined && !["compute-mpp", "modal-tempo"].includes(options.provider))
+    throw new Error("Use compute-mpp for a VM or modal-tempo for a sandbox.");
+  if (rental && (options.provider === "modal-tempo" || options.gpu !== undefined))
+    throw new Error("Rent provides SSH access. Use run --gpu for a managed GPU sandbox.");
   if (rental && options["work-duration"] !== undefined) throw new Error("Rentals use --duration for their full lifetime; work-duration applies to run.");
   if (rental) {
     if (!Array.isArray(command) || command.length) throw new Error("Rentals hand over access; use run to execute a workload.");

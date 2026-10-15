@@ -53,6 +53,21 @@ export async function catalog(options = {}) {
   return categories.flatMap((item) => item.value);
 }
 
+// Exact provider IDs keep their old meaning. Broad selection uses current region
+// metadata; DigitalOcean omits continents, so match its city to a named region.
+export async function regionsFor(selector) {
+  if (!/^[a-z0-9-]+$/.test(selector || "")) throw new Error("Select --region ID, europe or anywhere.");
+  if (selector !== "europe") return (machine) => machine.locations.filter((id) => selector === "anywhere" || id === selector);
+  const response = await fetch(endpoint + "regions", { signal: AbortSignal.timeout(60000), redirect: "error" });
+  if (!response.ok) throw new Error(`Region discovery HTTP ${response.status}; no quote submitted.`);
+  const { regions } = await response.json();
+  if (!Array.isArray(regions)) throw new Error("Invalid region catalog.");
+  const city = (value) => typeof value === "string" ? value.toLowerCase().replace(/\s+\d+$/, "").trim() : "";
+  const cities = new Set(regions.filter((r) => r.continent === "Europe").map((r) => city(r.city)).filter(Boolean));
+  return (machine) => machine.locations.filter((id) => regions.some((r) => r.provider === machine.provider && r.id === id &&
+    (r.continent === "Europe" || !r.continent && cities.has(city(r.city)))));
+}
+
 export function machineCapabilities(machine) {
   if (![machine.vcpu_count, machine.ram, machine.disk].every((value) => Number.isFinite(value) && value > 0) || machine.disk_count !== 1)
     throw new Error("Compute catalog has unsupported or incomplete resource quantities.");
@@ -74,6 +89,13 @@ export async function adopt(state, response) {
   if (usableIP(order.ip_address)) state.sshHost = order.ip_address;
   if (Number.isFinite(Date.parse(order.expires_at))) state.providerExpiresAt = order.expires_at;
   return order.id;
+}
+
+export async function extensionEndpoint(state) {
+  if (state.provider !== "compute-mpp" || !validRemoteId(state, state.remoteId)) throw new Error("Extension requires an existing compute instance.");
+  const auth = await readJSON(credentials(state));
+  if (!auth?.key) throw new Error("Missing saved compute management credential.");
+  return { url: endpoint + "instances/" + state.remoteId + "/extend", headers: ["-H", `X-API-Key: ${auth.key}`] };
 }
 
 async function management(state, method, options = {}, body) {

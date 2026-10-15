@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { join, basename, dirname, resolve } from "node:path";
@@ -6,9 +7,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { root, directory, load, save, list, readJSON, locked, fileLocked, recoverLock, ownerAlive, controllerRunning, OperationLocked } from "./state.mjs";
 import { createPlan, openPlan } from "./plans.mjs";
 import { taskSpec, taskFileOptions } from "./task-spec.mjs";
-import { budget, units, amount } from "./budget.mjs";
-import { active, prepare, reconcile, refresh, close, upload, download, terminal, operationCap } from "./workspace.mjs";
-import { execute } from "./provider.mjs";
+import { budget, units, amount, BudgetRejected, allocateExtension, vmCeiling } from "./budget.mjs";
+import { active, prepare, reconcile, refresh, close, upload, download, terminal, operationCap, deadlineCommand, duration } from "./workspace.mjs";
+import { execute, request, quote } from "./provider.mjs";
 import { launch, listJobs, getJob, jobDone } from "./jobs.mjs";
 import { report } from "./reports.mjs";
 import { check } from "./readiness.mjs";
@@ -89,17 +90,18 @@ async function planTask(name, options, command, experiment) {
   if (units(options.budget) > units(ledger.availableToAllocate)) throw new Error("Retained aggregate authorization cannot cover this task. No quote or purchase submitted.");
   if (experiment) task.experiment = experiment;
   const { digest, ...recipe } = definition;
+  const sandbox = options.provider === "modal-tempo" || options.gpu !== undefined;
   const plan = await createPlan(name, { recipe, repo: options.repo, ref: options.ref, disk,
     cpu: options.cpu, memory: options.memory, budget: options.budget, duration: options.duration,
-    region: options.region, machine: options.machine, provider: options.machine ? "compute-mpp" : undefined,
-    cheapest: !options.machine, kind: "vm", os: "linux", arch: "x86_64",
+    region: options.region, machine: options.machine, provider: options.provider || (sandbox ? "modal-tempo" : options.machine ? "compute-mpp" : undefined), gpu: options.gpu,
+    cheapest: !sandbox && !options.machine, kind: sandbox ? "sandbox" : "vm", os: "linux", ...(sandbox ? {} : { arch: "x86_64" }),
     "no-resize": options["no-resize"] }, task);
   if (plan.status === "unavailable") return { ...plan, name, cache: task.cache || null, guidance: task.guidance };
   const preview = { name, plan: plan.id, paymentSubmitted: false, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode,
     ...(task.chain ? { chain: task.chain } : {}),
-    machine: plan.machine.id, resources: plan.capabilities, region: options.region, providerWarning: plan.providerWarning,
+    provider: plan.provider, machine: plan.machine?.id || null, gpu: plan.body.gpu, resources: plan.capabilities, region: plan.body.region, providerWarning: plan.providerWarning,
     quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
-    lease: plan.lease || { prepaidHours: plan.body.prepaid_hours }, context: task.context,
+    lease: plan.lease || (sandbox ? { timeoutSeconds: plan.body.timeout } : { prepaidHours: plan.body.prepaid_hours }), context: task.context,
     setup: {
       recipe: { name: definition.name, sha256: definition.digest, prepareCommands: definition.prepare.length,
         afterCheckoutCommands: definition.afterCheckout?.length || 0 },
@@ -246,8 +248,10 @@ export async function taskStatus(name, expectedExperiment) {
       usableUntil: new Date(usableUntil).toISOString(),
       closeReason: task.closeReason || null, accessError: task.accessError || null } : {}),
     supervisor: { pid: owner?.pid || null, alive: Boolean(owner && await ownerAlive(owner)), lastObservedAt: task.observedAt || null },
+    extensions: task.extensions || [],
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
     accessObservations: state.accessObservations || [], initialization: state.initialization || null,
+    provider: state.provider, gpu: state.guestGpu || null,
     resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
@@ -302,6 +306,84 @@ export async function stopTask(name, expectedExperiment) {
   }, 600000); // Let an in-flight bounded preparation/transfer release its lock.
   await resumeTask(name);
   return taskStatus(name);
+}
+
+// Extensions keep the same remote identity, request journal and aggregate ledger.
+// A retry observes the saved payment and updates the guest timer; it never pays again.
+export async function extendRental(name, options) {
+  const result = await locked(name, async () => {
+    const state = await load(name), task = state.task;
+    if (state.provider !== "compute-mpp" || task?.kind !== "rental" || !task.readyAt || task.stopRequestedAt || task.outcome ||
+        state.phase !== "ready" || state.resizePending)
+      throw new Error("Extend requires a ready SSH rental that has not started cleanup.");
+    let cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt)) - task.timing.cleanupSeconds * 1000;
+    if (!Number.isFinite(cutoff) || Date.now() >= cutoff) throw new Error("Rental cleanup cutoff passed; extension cannot reopen it.");
+    const pending = task.extensions?.find((item) => item.phase !== "applied");
+    let extension;
+    if (options.resume) {
+      if (options.duration || options.budget || options.approve) throw new Error("Use extend NAME --resume alone to reconcile the saved extension.");
+      if (!pending) throw new Error("No unresolved extension to resume.");
+      extension = pending;
+    } else {
+      if (pending) throw new Error("An extension is unresolved. Use extend NAME --resume; no new payment submitted.");
+      const seconds = duration(options.duration);
+      if (units(options.budget) <= 0n) throw new Error("Set a positive additional --budget for the extension.");
+      const total = amount(units(state.totalCap) + units(options.budget));
+      const ceiling = await vmCeiling(state.profile);
+      if (ceiling !== null && units(total) > units(ceiling)) throw new Error("Extended rental allocation exceeds the VM ceiling.");
+      if (units(options.budget) > units((await budget()).availableToAllocate)) throw new Error("Aggregate budget cannot cover this extension.");
+      // Observe the existing order before binding its expiry. Status is free.
+      await request(state, "status", {}, "0", undefined, { deadline: cutoff });
+      cutoff = Math.min(cutoff, Date.parse(state.providerExpiresAt) - task.timing.cleanupSeconds * 1000);
+      if (!["active", "running"].includes(state.providerStatus) || !Number.isFinite(cutoff) || Date.now() >= cutoff)
+        throw new Error("Provider has not confirmed an active rental with enough remaining time.");
+      const body = { extend_hours: Math.ceil(seconds / 3600) };
+      const offer = await quote("extend", body, state.provider, state);
+      if (units(offer.amount) > units(options.budget)) throw new Error("Extension quote exceeds the additional budget; no payment submitted.");
+      const deadline = task.deadline + seconds * 1000;
+      if (!Number.isSafeInteger(deadline) || !Number.isFinite(new Date(deadline).getTime())) throw new Error("Extension deadline is not representable.");
+      const preview = { name, remoteId: state.remoteId, paymentSubmitted: false, quote: offer.amount,
+        additionalBudget: options.budget, allocation: total, deadline: new Date(deadline).toISOString(),
+        prepaidHours: body.extend_hours, currency: "USDC.e" };
+      if (!options.approve) return preview;
+      if (Date.now() >= cutoff) throw new Error("Rental cleanup cutoff passed while quoting; no payment submitted.");
+      extension = { id: randomUUID(), body, budget: options.budget, quote: offer.amount, previousCap: state.totalCap,
+        previousDeadline: task.deadline, previousExpiry: state.providerExpiresAt, deadline, seconds,
+        phase: "payment_pending", requestedAt: new Date().toISOString() };
+      task.extensions ??= [];
+      task.extensions.push(extension);
+      await save(state);
+    }
+    state.totalCap = await allocateExtension(state, extension);
+    await save(state);
+    if (!options.resume) {
+      // request() records intent before dispatch and never retries a paid call.
+      await request(state, "extend", extension.body, extension.budget, extension.id, { deadline: cutoff });
+    }
+    await request(state, "status", {}, "0", undefined, { deadline: cutoff });
+    const expected = Date.parse(extension.previousExpiry) + extension.body.extend_hours * 3600000;
+    if (!["active", "running"].includes(state.providerStatus) || !Number.isFinite(expected) || Date.parse(state.providerExpiresAt) < expected)
+      throw new Error("Extension is not confirmed by the provider expiry. Use extend NAME --resume; payment is never repeated.");
+    extension.phase = "timer_pending";
+    await save(state);
+    const response = await execute(state, deadlineCommand(extension.deadline), operationCap, undefined, { deadline: cutoff });
+    let timer;
+    try { timer = JSON.parse(response.stdout); } catch { /* Preserve the saved SSH response. */ }
+    if (response.returncode !== 0 || timer?.deadline !== extension.deadline / 1000 || timer.timer?.ActiveState !== "active" || timer.timer?.SubState !== "waiting")
+      throw new Error("Provider extended, but the guest deadline is unconfirmed. Use extend NAME --resume; the previous local cutoff remains in force.");
+    task.deadline = extension.deadline;
+    task.timing.authorizedSeconds += extension.seconds;
+    state.durationSeconds += extension.seconds;
+    state.deadlineEstimate = new Date(extension.deadline).toISOString();
+    extension.phase = "applied";
+    extension.appliedAt = new Date().toISOString();
+    extension.timer = timer;
+    await save(state);
+    return { name, extended: true, deadline: state.deadlineEstimate, providerExpiresAt: state.providerExpiresAt,
+      allocation: state.totalCap, quote: extension.quote, requestId: extension.id };
+  }, 60000);
+  if (result.extended) await resumeTask(name);
+  return result;
 }
 
 async function finish(name, jobs) {
@@ -409,7 +491,7 @@ export async function supervise(name) {
       await update(name, (task) => { task.controllerResumeHandledAt = task.controllerResumeRequestedAt; });
     while (true) {
       let state = await load(name);
-      if (!state.task || state.provider !== "compute-mpp") throw new Error("Managed compute VM task required; paid sandbox polling is not supported.");
+      if (!state.task || !["compute-mpp", "modal-tempo"].includes(state.provider)) throw new Error("Managed task required.");
       const jobs = await listJobs(name), step = nextTaskStep(state, jobs);
       if (step === "done") return;
       try {
@@ -429,9 +511,19 @@ export async function supervise(name) {
             return;
           }
         } else if (step === "confirm") {
+          let observationFailed = false;
           try { state = await refresh(name); }
-          catch (error) { state = await update(name, (task) => { task.lastError = error.message; }); }
+          catch (error) { observationFailed = true; state = await update(name, (task) => { task.lastError = error.message; }); }
           if (!terminal(state)) {
+            // Modal may acknowledge before its status converges. Observe only
+            // within the task's cleanup allowance; failed observations park it.
+            const confirmationCutoff = Math.min(state.task.deadline,
+              Date.parse(state.terminationAcknowledgedAt) + state.task.timing.cleanupSeconds * 1000);
+            if (state.provider === "modal-tempo" && !observationFailed && Date.now() < confirmationCutoff) {
+              await update(name, (task) => { task.observedAt = new Date().toISOString(); });
+              await delay(15000);
+              continue;
+            }
             // One follow-up observation did not confirm destruction. Return
             // evidence and stop polling; explicit resume observes this same ID.
             const result = state.task.kind === "rental" ? null : await report(name, null, { output: state.task.output });
@@ -491,7 +583,15 @@ export async function supervise(name) {
           await prepare(name);
           await update(name, (task) => { if (task.lastError?.startsWith("prepare:")) delete task.lastError; });
         }
-        else if (["bootstrap", "preparation", "work"].includes(step)) await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true);
+        else if (["bootstrap", "preparation", "work"].includes(step)) {
+          const deadline = Math.min(state.task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - state.task.timing.cleanupSeconds * 1000;
+          if (state.provider === "modal-tempo") {
+            if (Date.now() < (state.task.nextPollAt || 0)) { await delay(Math.min(15000, state.task.nextPollAt - Date.now())); continue; }
+            // Save before paying so supervisor recovery keeps the polling interval.
+            await update(name, (task) => { task.nextPollAt = Date.now() + 15000; });
+          }
+          await getJob(name, step === "bootstrap" ? state.repairJob || state.bootstrapJob : step, true, { deadline });
+        }
         else if (step === "upload") {
           const pending = state.task.inputs.find((item) => !item.uploadedAt && !item.cacheSkippedAt);
           let staged;
@@ -573,13 +673,14 @@ export async function supervise(name) {
       } catch (error) {
         if (!(error instanceof OperationLocked)) await update(name, async (task) => {
           task.lastError = `${step}: ${error.message}`;
+          if (error instanceof BudgetRejected && !["finish", "confirm"].includes(step)) task.outcome = "budget_exhausted";
           // Transport observations may recover; failed dispatches already have
           // their durable marker and will be observed on the following iteration.
           if (step.startsWith("launch-") && !(await listJobs(name)).some((job) => job.id === step.slice(7)))
             task.outcome = "preparation_failed";
         });
       }
-      // Free compute management/SSH only. Never run paid sandbox polling here.
+      // Paid sandbox observations use the same bounded interval and durable allocation.
       await delay(["launch-work", "launch-preparation", "upload"].includes(step) ? 1000 : 15000);
     }
   });

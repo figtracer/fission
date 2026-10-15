@@ -53,35 +53,44 @@ outflow are distinct from the quoted service charge.
 | Option | Workload | Integration |
 | --- | --- | --- |
 | Compute gateway / Vultr and DigitalOcean | Linux VMs and prepared environments | Managed rentals and tasks |
-| Modal | Sandboxes, optionally with a GPU | Advanced sandbox interface; see GPU sandboxes |
+| Modal | Sandboxes, optionally with a GPU | Managed `run`, results and cleanup |
 | Judge0 / Locus MPP | Short code execution | `run --from`, `status`, local results |
 | Build With Locus | ARM64 container services and databases | Discovery; recurring credit billing needs separate lifecycle support |
 
 ## GPU sandboxes
 
-Modal sandboxes can attach a GPU. Plan one with
-`fission advanced plan NAME --provider modal-tempo --gpu H100 --duration 1h --budget 5`,
-inspect the quote, then `fission advanced open NAME --plan ID --approve`. Use
-`advanced exec`, `run` and `job` for work and `advanced close NAME` when done.
-Accepted types are T4, L4, A10G, L40S, A100-40GB, A100-80GB, H100, H200 and B200,
-optionally with `:COUNT` (1-8). This is a sandbox, not an SSH VM, and managed
-`run`/`rent` do not use it: each command, status check and job poll is a paid call.
+Use the same managed workflow with a GPU:
+
+```sh
+fission run gpu-job --gpu T4 --duration 1h --work-duration 1m --budget 1 -- nvidia-smi
+```
+
+Inspect the quote, then add `--approve`. Fission collects results and closes the
+sandbox. `--provider modal-tempo` selects a CPU sandbox. Both use the controller
+and the usual `status` and `stop` commands. Sandboxes have no SSH access or
+CPU/memory/disk guarantees. Omit VM region and machine flags.
+
+Accepted GPU types are T4, L4, A10G, L40S, A100-40GB, A100-80GB, H100, H200 and B200,
+optionally with `:COUNT` (1–8). Each command, status check and transfer chunk is a
+paid call. Planning leaves room for one observation per 15 seconds plus lifecycle
+calls. Transfers share the remaining allocation; termination keeps reserved funds.
 
 The gateway prices any GPU name it receives, including names Modal does not
 offer, so a quote is not proof of the hardware. After purchase Fission runs
 `nvidia-smi` once and requires the requested count, model and memory before its
-bootstrap starts. A mismatch leaves the sandbox `prepare_failed` with the
-observation in `guestGpu`; close it with `--discard-output`. The budget keeps
-0.0001 more lifecycle room for that check.
+bootstrap starts. A mismatch stops preparation and triggers managed cleanup.
+The observation is retained in `guestGpu`. Advanced workspaces still require explicit close.
 
 Locus's [billing guide](https://buildwithlocus.com/billing.md) specifies $1.50 per
-service/month for MPP-funded workspaces (checked October 2, 2026). This differs
-from its overview's $0.25 headline. Signup and funding quotes are separate from
-container creation. Fission does not automatically fund a shared credit account
+service/month for MPP-funded workspaces (checked October 15, 2026). The lower
+$0.25 price applies to its Polygon funding path. Signup and funding quotes are
+separate from container creation. Fission does not automatically fund a shared credit account
 or treat workspace credit as a per-task spending limit.
 
-DigitalOcean uses Ubuntu 24.04 and a minimum prepaid day. Select a `do:` machine
-and its listed region, or let Fission compare compatible offers. Purchase, SSH,
+DigitalOcean uses Ubuntu 24.04 and a minimum prepaid day. Its gateway now documents
+resize, but our October 15 attempt remained pending beyond the preparation cutoff.
+Fission keeps direct provisioning until a resize passes guest verification and
+cleanup. Select a `do:` machine and its listed region, or let Fission compare compatible offers. Purchase, SSH,
 execution, collection and deletion were verified on October 3, 2026.
 
 DigitalOcean plans are exposed by the same compute gateway as Vultr; another
@@ -90,13 +99,14 @@ do not establish that an SSH machine can be provisioned and cleaned up.
 
 ## Candidates under review
 
-Checked October 3, 2026; these are discovery results, not qualified integrations.
+Checked October 15, 2026; these are discovery results, not qualified integrations.
 
-- [AgentVM](https://mpp.agentvm.sh/compute/sessions) advertises Tempo MPP sessions
-  on Hetzner, up to 4 vCPU, 16 GB RAM and 160 GB disk, for up to six hours. Its
-  discovery endpoint responded. Earlier paid checks reached SSH and observed expiry
-  cleanup, but a documented early-stop operation and durable renewal/settlement
-  remain unqualified for managed rentals.
+- RunPod GPU plans appear in the compute catalog, but the live provisioning API
+  rejects ordinary rentals with “AI deployments only.” Fission does not offer
+  these as generic machines until access, execution and cleanup are qualified.
+- [AgentVM](https://mpp.agentvm.sh/compute/sessions) currently reports that Tempo
+  session settlement is not configured. Earlier paid experiments reached SSH
+  and expiry cleanup; they do not establish current availability.
 - [OpenVPS](https://github.com/kartojal/openvps) advertises Tempo MPP and SSH into
   Firecracker VMs. Its live endpoints were unreachable during this check.
 

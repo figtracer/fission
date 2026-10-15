@@ -72,6 +72,32 @@ export function duration(text) {
   return seconds;
 }
 
+export function deadlineCommand(deadline) {
+  return ["python3", "-c", `import datetime,json,pathlib,subprocess,sys,time
+from pathlib import Path
+deadline=float(sys.argv[1])
+assert deadline-time.time()>=60, 'Task deadline too close to arm guest shutdown'
+when=datetime.datetime.fromtimestamp(deadline,datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+unit='fission-deadline-'+str(int(deadline))
+p=Path('/workspace/.fission/deadline.json'); p.parent.mkdir(parents=True,exist_ok=True)
+old=json.loads(p.read_text()) if p.exists() else None
+def status():
+ r=subprocess.run(['systemctl','show',unit+'.timer','-p','ActiveState','-p','SubState','-p','NextElapseUSecRealtime'],capture_output=True,text=True)
+ return dict(line.split('=',1) for line in r.stdout.splitlines() if '=' in line)
+props=status()
+if props.get('ActiveState')!='active':
+ subprocess.run(['systemd-run','--unit',unit,'--description','Fission task deadline shutdown','--on-calendar',when,'--timer-property','AccuracySec=1s','systemctl','poweroff'],check=True)
+ props=status()
+assert props.get('ActiveState')=='active' and props.get('SubState')=='waiting', 'Guest shutdown timer not armed'
+# Keep the old timer until the replacement is armed. Repeating this command
+# reconciles the same named timer after an interrupted acknowledgement.
+if old and old.get('unit','fission-deadline')!=unit:
+ subprocess.run(['systemctl','stop',old.get('unit','fission-deadline')+'.timer'],check=True)
+record={'deadline':deadline,'calendar':when,'unit':unit,'timer':props,'observedAt':time.time()}
+tmp=p.with_suffix('.tmp'); tmp.write_text(json.dumps(record)); tmp.replace(p)
+print(json.dumps(record))`, String(deadline / 1000)];
+}
+
 export async function start(name, prepared) {
   prepared = { ...prepared, provider: providerId(prepared.provider) };
   return locked(name, async () => {
@@ -147,7 +173,7 @@ async function prepareState(state) {
     state.guestGpu = verifyGpu(state.body.gpu, result);
     if (!state.guestGpu.verified) {
       state.phase = "prepare_failed";
-      state.preparationError = `GPU check failed: ${state.guestGpu.problems.join("; ")}. No bootstrap launched; close with advanced close ${state.name} --discard-output.`;
+      state.preparationError = `GPU check failed: ${state.guestGpu.problems.join("; ")}. No bootstrap launched. ${state.task ? "Managed cleanup will follow." : `Close with advanced close ${state.name} --discard-output.`}`;
       await save(state);
       return state;
     }
@@ -158,17 +184,7 @@ async function prepareState(state) {
   if (state.source) commands.unshift(["python3", "-c", "import shutil,subprocess; subprocess.run(['apt-get','update'],check=True) if not shutil.which('git') else None; subprocess.run(['apt-get','install','-y','git','ca-certificates'],check=True) if not shutil.which('git') else None"]);
   if (state.source) commands.push(["python3", "-c", "import subprocess,pathlib,sys,json; p=pathlib.Path('/workspace/source'); p.mkdir(); subprocess.run(['git','init',str(p)],check=True); subprocess.run(['git','-C',str(p),'fetch','--depth','1',sys.argv[1],sys.argv[2]],check=True); subprocess.run(['git','-C',str(p),'checkout','--detach','FETCH_HEAD'],check=True); actual=subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip(); assert actual==sys.argv[2]; subprocess.run(['git','-C',str(p),'submodule','update','--init','--recursive'],check=True); print(json.dumps({'commit':actual,'submodules':subprocess.check_output(['git','-C',str(p),'submodule','status','--recursive'],text=True)}))", state.source.url, state.source.commit]);
   commands.push(...(state.recipe.afterCheckout || []));
-  if (state.task) commands.unshift(["python3", "-c", `import datetime,json,pathlib,subprocess,sys,time
-deadline=float(sys.argv[1])
-assert deadline-time.time()>=60, 'Task deadline too close to arm guest shutdown'
-when=datetime.datetime.fromtimestamp(deadline,datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-subprocess.run(['systemd-run','--unit','fission-deadline','--description','Fission task deadline shutdown','--on-calendar',when,'--timer-property','AccuracySec=1s','systemctl','poweroff'],check=True)
-raw=subprocess.check_output(['systemctl','show','fission-deadline.timer','-p','ActiveState','-p','SubState','-p','NextElapseUSecRealtime'],text=True)
-props=dict(line.split('=',1) for line in raw.splitlines() if '=' in line)
-assert props.get('ActiveState')=='active' and props.get('SubState')=='waiting', 'Guest shutdown timer not armed: '+raw
-record={'deadline':deadline,'calendar':when,'timer':props,'observedAt':time.time()}
-pathlib.Path('/workspace/.fission/deadline.json').write_text(json.dumps(record))
-print(json.dumps(record))`, String(state.task.deadline / 1000)]);
+  if (state.task && state.provider === "compute-mpp") commands.unshift(deadlineCommand(state.task.deadline));
   // The job identity is persisted before launch. An ambiguous result is observed,
   // never automatically replayed or mistaken for failed preparation.
   if (deadline !== undefined && Date.now() >= deadline)
@@ -179,7 +195,7 @@ print(json.dumps(record))`, String(state.task.deadline / 1000)]);
   if (seconds <= 0) throw new Error(`Preparation cutoff ${new Date(deadline).toISOString()} passed; no bootstrap launched.`);
   state.bootstrapJob = "bootstrap";
   state.recipe = { ...state.recipe, artifacts: [...new Set([...state.recipe.artifacts, "/workspace/.fission/jobs/bootstrap/output.log",
-    ...(state.task ? ["/workspace/.fission/deadline.json"] : [])])] };
+    ...(state.task && state.provider === "compute-mpp" ? ["/workspace/.fission/deadline.json"] : [])])] };
   await save(state);
   await launch(state, "bootstrap", commands, seconds, state.recipe.readiness || []);
   return state;
@@ -228,6 +244,10 @@ async function refreshState(state, options) {
   state.remoteStatus = response.status;
   state.returncode = response.returncode;
   if (response.status === "terminated") {
+    if (state.task && !terminal(state)) {
+      delete state.task.report;
+      if (state.task.lastError?.startsWith("Cleanup remains unconfirmed.")) delete state.task.lastError;
+    }
     state.phase = "terminated";
     state.closedAt ??= state.observedAt;
   } else if (terminal(state)) {
@@ -281,6 +301,7 @@ async function terminate(state) {
     if (terminal(state)) return state;
     throw new Error(`Termination is unconfirmed: ${error.message}. Run status --refresh before another close.`);
   }
+  state.terminationAcknowledgedAt = new Date().toISOString();
   state.remoteStatus = "termination_acknowledged";
   await save(state);
   // The gateway can acknowledge before the process has actually exited.
@@ -345,11 +366,11 @@ export async function upload(state, local, remote, options = {}) {
   const temp = remote + ".fission-" + randomUUID();
   const script = "import sys,base64,pathlib,os; os.umask(0o077); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); f=p.open(sys.argv[2]); f.write(base64.b64decode(sys.argv[3])); f.close()";
   for (let offset = 0; offset < Math.max(bytes.length, 1); offset += chunkBytes) {
-    const result = await execute(state, ["python3", "-c", script, temp, offset ? "ab" : "xb", bytes.subarray(offset, offset + chunkBytes).toString("base64")], operationCap);
+    const result = await execute(state, ["python3", "-c", script, temp, offset ? "ab" : "xb", bytes.subarray(offset, offset + chunkBytes).toString("base64")], operationCap, undefined, options);
     if (result.returncode) throw new Error("Upload interrupted; remote staging file retained. No command was retried.");
   }
   const digest = createHash("sha256").update(bytes).digest("hex");
-  const finish = await execute(state, ["python3", "-c", "import sys,hashlib,os; p=sys.argv[1]; assert hashlib.sha256(open(p,'rb').read()).hexdigest()==sys.argv[3]; os.link(p,sys.argv[2]); os.unlink(p)", temp, remote, digest], operationCap);
+  const finish = await execute(state, ["python3", "-c", "import sys,hashlib,os; p=sys.argv[1]; assert hashlib.sha256(open(p,'rb').read()).hexdigest()==sys.argv[3]; os.link(p,sys.argv[2]); os.unlink(p)", temp, remote, digest], operationCap, undefined, options);
   if (finish.returncode) throw new Error("Upload verification or publication failed. Destination must not exist.");
   return { remote, bytes: bytes.length, sha256: digest };
 }
@@ -383,7 +404,7 @@ export async function download(state, remote, local, options = {}) {
       return { local: destination, remote, bytes: actual.size, sha256: actual.sha256 };
     }
     do {
-      const result = await execute(state, ["python3", "-c", script, remote, String(offset)], operationCap);
+      const result = await execute(state, ["python3", "-c", script, remote, String(offset)], operationCap, undefined, options);
       if (result.returncode) throw new Error("Remote file could not be read.");
       const part = JSON.parse(result.stdout);
       if (!Number.isSafeInteger(part.size) || part.size < 0 || !/^[a-f0-9]{64}$/.test(part.sha256)) throw new Error("Invalid file manifest.");

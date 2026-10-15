@@ -13,7 +13,14 @@ fission run work --budget 2 --duration 2h --work-duration 10m --region ams -- sh
 
 These commands preview without paying. Repeat with `--approve` inside the user's
 authorization. Use `status work`, `ssh work` for rentals, and `stop work` to finish.
+Use `--region europe` or `--region anywhere` to compare a broader shortlist.
 Amounts are examples, not live quotes. `fission help run` lists all options.
+
+For GPU work, replace the region with `--gpu T4` (or another supported type).
+`--provider modal-tempo` selects a CPU sandbox. Both use managed results and
+cleanup; sandbox API calls share the task budget. See [compute options](compute.md).
+Extend a ready SSH rental with `fission extend work --duration 24h --budget 1`;
+inspect the quote before adding `--approve`.
 
 ## Task files
 

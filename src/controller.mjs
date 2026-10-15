@@ -53,7 +53,7 @@ export async function runController() {
           const name = entry.name;
           try {
             const state = await readJSON(join(root, name, "state.json"));
-            if (!state?.task || state.provider !== "compute-mpp") continue;
+            if (!state?.task || !["compute-mpp", "modal-tempo"].includes(state.provider)) continue;
             if (state.name !== name) throw new Error("Task name differs from its state directory; inspect the record before recovery.");
             const step = nextTaskStep(state, await listJobs(name));
             if (step === "done") continue;

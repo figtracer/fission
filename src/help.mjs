@@ -13,6 +13,9 @@ Commands are argv arrays; use sh -c explicitly for a shell script.
 Options:
   --cpu N --memory GiB --disk GiB  Minimum machine resources
   --machine ID                    Select an exact catalog machine
+  --region ID|europe|anywhere      Compare within an exact region or broader scope
+  --gpu TYPE[:COUNT]              Run on a verified Modal GPU sandbox
+  --provider modal-tempo          Use a CPU sandbox; no SSH/resource guarantees
   --no-resize                     Direct provisioning (required above 4 CPU/8 GiB)
   --input FILE[=/workspace/PATH]   Upload a file; repeatable
   --artifact /workspace/PATH      Retrieve an output file; repeatable
@@ -20,6 +23,9 @@ Options:
   --repo URL --ref SHA            Optional public GitHub checkout at a full commit
   --prepare-duration D            Setup allowance (default 10m)
   --output DIR                    Local results (default ./fission)
+
+VM runs require --region; GPU/sandbox runs omit it. Sandbox API calls, including
+polling and file transfers, share the task budget. Cleanup keeps reserved funds.
 
 TOTAL includes 30m provisioning, setup, WORK and 15m cleanup. Allowances are
 estimates, not performance guarantees. A prepaid lease may outlast your task.
@@ -53,6 +59,7 @@ TOTAL includes provisioning, setup and cleanup from purchase, not guaranteed
 hands-on time. The rental stays open until stop NAME or its authorized cutoff.
 Disconnecting SSH does not stop it. Use stop NAME and confirm cleanup with status.
 SSH --tmux selects its window inside the Fission tmux dashboard.
+To keep the same rental longer, use extend NAME with a duration and additional budget.
 See help run for resource, transfer and setup options.`;
 
 const status = `Observe tasks or resume the same recorded task.
@@ -68,7 +75,7 @@ For rentals, waiting stops when access is ready or cleanup finishes.
 Waiting exits 0 for success/ready/closed, 1 for a finished failure, 2 if unfinished.
 Ctrl-C stops waiting, not the task. Use stop for cancellation.
 Host sleep pauses coordination; guest job deadlines and prepaid lease still bound
-work. Bootstrap also arms guest poweroff at the full task deadline. Poweroff does
+work. VM bootstrap also arms guest poweroff at the full task deadline. Sandboxes use the provider timeout. Poweroff does
 not confirm provider destruction. On wake use --resume; see help rental for limits.`;
 
 const budget = `Inspect or record the retained authorization ledger.
@@ -122,6 +129,7 @@ Usage: fission                     Open the Rust task dashboard
        fission install             Install the agent skill
        fission rent NAME ...      Prepare a machine for your own use
        fission ssh NAME           Connect to a ready machine
+       fission extend NAME ...    Preview or approve more time on the same rental
        fission run NAME ... -- CMD Plan and execute one managed task
        fission status [NAME]       Progress, outcome, cost, evidence, cleanup
        fission stop NAME           Cancel work and request confirmed cleanup
@@ -138,6 +146,18 @@ Durations: s/m/h/d, at least 60s; provider availability and authorization bound 
 Memory/disk: GiB. Money: USDC.e.
 Advanced recovery: fission help advanced. Guides: fission help guides.
 FISSION_HOME selects the existing durable state and ledger.`;
+  if (key === "extend") return `Extend a ready SSH rental; preview without --approve.
+
+Usage: fission extend NAME --duration ADDITIONAL --budget ADDITIONAL [--approve]
+       fission extend NAME --resume
+
+The budget is added to this rental's allocation within the retained aggregate and
+VM ceilings. The provider quotes prepaid time, rounded up to whole hours.
+Approval pays once, confirms the provider expiry and replaces the guest shutdown
+timer before moving the local deadline. Extend before the cleanup cutoff.
+--resume observes an unresolved extension; it never repeats its payment.
+A stopped or closing rental cannot be reopened. Workflows keep their original
+job deadlines; this command applies to rent only.`;
   if (key === "controller") return `Keep supervision running on an always-on Linux host.
 
 Usage: fission controller install  Install and start a systemd user service

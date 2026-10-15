@@ -45,8 +45,8 @@ pauses coordination; it does not cancel tasks or delete machines. Use
 
 Unknown creation or deletion is shown as needing attention. Inspect the record,
 then use `fission status NAME --resume` for one explicit recovery attempt. A
-corrupt task is reported separately so other tasks can keep running. Legacy
-workspaces and paid sandbox polling remain outside automatic supervision.
+corrupt task is reported separately so other tasks can keep running. Managed Modal
+jobs also resume with their existing budgets and polling interval. Legacy workspaces remain outside automatic supervision.
 
 ## Recovery and data
 
