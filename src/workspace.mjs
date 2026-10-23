@@ -134,6 +134,10 @@ export async function start(name, prepared) {
     state.deadlineEstimate = new Date(Date.parse(state.requestedAt) + state.durationSeconds * 1000).toISOString();
     state.phase = "preparing";
     await save(state);
+    // Dependent resource purchases occur only in this approved creation path.
+    // Recovery and the supervisor may observe them, but cannot buy replacements.
+    if (state.task?.watchdog) await (await import("./watchdog.mjs")).registerWatchdog(state);
+    if (state.task?.browser) await (await import("./browser.mjs")).createBrowser(state);
     // Managed tasks return after purchase; the detached owner performs preparation.
     return state.task ? state : prepareState(state);
   });

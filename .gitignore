@@ -8,3 +8,4 @@ outputs/
 tui/target/
 /fission/
 /dist/
+/.wrangler/

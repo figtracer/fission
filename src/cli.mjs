@@ -72,7 +72,7 @@ async function main() {
     input: { type: "string", multiple: true }, artifact: { type: "string", multiple: true },
     resume: { type: "boolean" }, wait: { type: "string" },
     refresh: { type: "boolean" }, "discard-output": { type: "boolean" }, cheapest: { type: "boolean" }, budget: { type: "string" },
-    "no-resize": { type: "boolean" },
+    "no-resize": { type: "boolean" }, browser: { type: "boolean" }, watchdog: { type: "string" },
     plan: { type: "string" }, profile: { type: "string" }, os: { type: "string" }, arch: { type: "string" }, kind: { type: "string" },
     provider: { type: "string" }, machine: { type: "string" }, region: { type: "string" }, gpu: { type: "string" },
     cpu: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, repo: { type: "string" }, ref: { type: "string" }, "total-spend": { type: "string" }, "vm-max-spend": { type: "string" },

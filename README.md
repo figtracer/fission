@@ -31,8 +31,9 @@ This installs the agent skill and opens the Rust dashboard. Set up your
 
 You choose the software and commands. Fission tracks spending, results and
 cleanup. GPU jobs use the same workflow; rentals can be extended within budget.
-Short source-file jobs can use Judge0 without renting a machine.
+Attach a browser session for web workflows. Short source-file jobs can use
+Judge0 without renting a machine.
 
 Run `fission help` for commands.
 
-[Always-on controller](docs/controller.md) · [Budgets and recovery](docs/rental.md)
+[Browser sessions](docs/browser.md) · [Always-on controller](docs/controller.md) · [Budgets and recovery](docs/rental.md)

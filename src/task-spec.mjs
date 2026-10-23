@@ -4,7 +4,7 @@ import { recipe, duration, validateRecipe } from "./workspace.mjs";
 import { fingerprint } from "./experiments.mjs";
 
 // The same generic contract serves CLI commands, task files and machine groups.
-export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "provider", "gpu", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "artifact", "output"];
+export const taskOptions = ["budget", "duration", "work-duration", "prepare-duration", "region", "machine", "provider", "gpu", "browser", "watchdog", "cpu", "memory", "disk", "no-resize", "repo", "ref", "cwd", "input", "artifact", "output"];
 export const taskFileOptions = [...taskOptions, "recipe", "preparation", "checks", "context", "kind"];
 
 export async function taskSpec(options, command) {
@@ -12,6 +12,13 @@ export async function taskSpec(options, command) {
     throw new Error("Unsupported task option. Supply your setup and commands; use fission help run.");
   if (options.kind !== undefined && !["run", "rental"].includes(options.kind)) throw new Error("Task kind must be run or rental.");
   const rental = options.kind === "rental";
+  if (options.browser !== undefined && typeof options.browser !== "boolean") throw new Error("browser must be true or false.");
+  if (rental && options.browser) throw new Error("Browser sessions accompany run commands; rent provides SSH access.");
+  if (options.watchdog !== undefined) {
+    const { checkWatchdog } = await import("./watchdog.mjs");
+    if (options.provider === "modal-tempo" || options.gpu !== undefined) throw new Error("The deadline watchdog supports compute VMs. Sandboxes retain their provider timeout.");
+    await checkWatchdog(options.watchdog);
+  }
   if (options.provider !== undefined && !["compute-mpp", "modal-tempo"].includes(options.provider))
     throw new Error("Use compute-mpp for a VM or modal-tempo for a sandbox.");
   if (rental && (options.provider === "modal-tempo" || options.gpu !== undefined))
@@ -68,6 +75,6 @@ export async function taskSpec(options, command) {
   checks.push(...(options.checks || []));
   const resolved = validateRecipe({ name: "checks", prepare: [], artifacts: [], checks });
   return { definition, disk: options.disk, task: { schemaVersion: 2, ...(rental ? { kind: "rental" } : {}),
-    command, cwd, inputs, preparation, artifacts, scope: "tools", probes: resolved.checks,
+    command, cwd, inputs, preparation, artifacts, ...(options.browser ? { browser: { phase: "planned", body: { estimatedMinutes: Math.ceil(total / 60) } } } : {}), ...(options.watchdog ? { watchdog: { url: options.watchdog } } : {}), scope: "tools", probes: resolved.checks,
     timing, output: resolve(options.output || "fission"), context: options.context || "User-supplied Linux workflow." } };
 }

@@ -16,6 +16,8 @@ Options:
   --region ID|europe|anywhere      Compare within an exact region or broader scope
   --gpu TYPE[:COUNT]              Run on a verified Modal GPU sandbox
   --provider modal-tempo          Use a CPU sandbox; no SSH/resource guarantees
+  --browser                       Attach a paid Browserbase session to this run
+  --watchdog HTTPS_ORIGIN         Cloud deadline cleanup for compute VMs
   --no-resize                     Direct provisioning (required above 4 CPU/8 GiB)
   --input FILE[=/workspace/PATH]   Upload a file; repeatable
   --artifact /workspace/PATH      Retrieve an output file; repeatable
@@ -23,6 +25,11 @@ Options:
   --repo URL --ref SHA            Optional public GitHub checkout at a full commit
   --prepare-duration D            Setup allowance (default 10m)
   --output DIR                    Local results (default ./fission)
+
+With --browser, preparation and work receive FISSION_BROWSER_URL (CDP WebSocket).
+The browser quote shares the task budget and cleanup. Install your browser client
+in preparation. See docs/browser.md. --watchdog requires your deployed worker
+and FISSION_WATCHDOG_TOKEN; see docs/controller.md. Its deadline cannot extend.
 
 VM runs require --region; GPU/sandbox runs omit it. Sandbox API calls, including
 polling and file transfers, share the task budget. Cleanup keeps reserved funds.

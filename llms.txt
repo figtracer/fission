@@ -19,6 +19,7 @@ Everything manual or low-level is `fission advanced COMMAND`.
 Documentation:
 - [README](README.md)
 - [Tasks](docs/tasks.md)
+- [Browser sessions](docs/browser.md)
 - [Rental safety and recovery](docs/rental.md)
 - [Installation](docs/install.md)
 - [Always-on controller](docs/controller.md)

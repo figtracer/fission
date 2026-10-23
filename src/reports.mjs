@@ -1,3 +1,4 @@
+import { browserClosed, browserStatus } from "./browser.mjs";
 import { mkdir, readFile, copyFile, chmod, stat, open, readdir } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { join, resolve } from "node:path";
@@ -55,6 +56,7 @@ export async function report(name, id, options = {}) {
       timing: state.task.timing, deadline: state.task.deadline, command: state.task.command,
       node: state.task.node, snapshot: state.task.snapshot, context: state.task.context, scope: state.task.scope, cwd: state.task.cwd, preparation: state.task.preparation,
       inputs: state.task.inputs, artifacts: state.task.artifacts, exports: state.task.exports || [], lastError: state.task.lastError || null,
+      browser: browserStatus(state.task.browser), watchdog: state.task.watchdog || null,
       cache: state.task.cache || null, experiment: state.task.experiment || null, guidance: state.task.guidance || null,
       jobs: (await listJobs(name)).map((job) => ({ id: job.id, phase: job.phase, digest: job.digest, observation: job.observation })) } } : {}),
     harness: { recipeSha256, recipeVerified, runnerSha256: job?.runnerSha256 || null },
@@ -77,7 +79,7 @@ export async function report(name, id, options = {}) {
       verifiedOutflow: unknown ? null : amount(transactions.reduce((sum, transaction) => sum + units(transaction.paid), 0n)),
       incomplete: unknown, refreshError: payments.refreshError || null, transactions },
     assessment: notes, log: null,
-    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || state.observedAt || null },
+    cleanup: { phase: state.phase, confirmed: ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase) && browserClosed(state.task?.browser), observedAt: state.closedAt || state.observedAt || null },
   };
   const parent = resolve(options.output || "fission", name);
   await mkdir(parent, { recursive: true, mode: 0o700 });

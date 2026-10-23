@@ -17,7 +17,7 @@ try {
   manifest.os = [process.platform];
   manifest.cpu = [process.arch];
   await writeFile(join(staging, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
-  for (const path of ["src", "recipes", "harness", "skills", "docs", "README.md", "AGENTS.md", "llms.txt"])
+  for (const path of ["src", "cloud", "recipes", "harness", "skills", "docs", "README.md", "AGENTS.md", "llms.txt"])
     await cp(join(root, path), join(staging, path), { recursive: true });
   const binary = "tui/target/release/fission-tui";
   await mkdir(join(staging, "tui/target/release"), { recursive: true });

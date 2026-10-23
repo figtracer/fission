@@ -26,6 +26,10 @@ export async function launch(state, id, commands, seconds, readiness = [], cwd =
   const deadline = Math.min(Date.now() / 1000 + seconds, Date.parse(state.providerExpiresAt || state.deadlineEstimate) / 1000, taskDeadline);
   if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) throw new Error("Insufficient estimated lease time for a new job.");
   const spec = { id, commands, readiness, cwd, deadline, pollSeconds: 15 };
+  if (state.task?.browser && ["preparation", "work"].includes(id)) {
+    const { browserEnvironment } = await import("./browser.mjs");
+    spec.environment = await browserEnvironment(state);
+  }
   if (state.task && id === "work" && !(state.task.schemaVersion === 2 && !state.task.probes.length)) {
     const { probes } = await import("./readiness.mjs");
     // New plans carry the exact compiled gates. Retain inference only for saved

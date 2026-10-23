@@ -324,7 +324,11 @@ export async function computeRequest(state, operation, body, id, options = {}) {
   }
   else {
     let response;
-    try { response = await management(state, operation === "resize" ? "POST" : operation === "terminate" ? "DELETE" : "GET", options, operation === "resize" ? body : undefined); }
+    try {
+      response = operation === "terminate" && state.task?.watchdog?.requestedAt
+        ? await (await import("./watchdog.mjs")).closeWithWatchdog(state)
+        : await management(state, operation === "resize" ? "POST" : operation === "terminate" ? "DELETE" : "GET", options, operation === "resize" ? body : undefined);
+    }
     catch (error) {
       await writeJSON(path, { ...intent, state: error.notDispatched ? "not_dispatched" : "unknown",
         finishedAt: new Date().toISOString(), error: error.message });

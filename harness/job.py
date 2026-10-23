@@ -18,6 +18,7 @@ spec = json.loads((root / "spec.json").read_text())
 deadline = spec["deadline"]
 # User-provided tools in the workspace remain available to nested processes.
 os.environ["PATH"] = "/workspace" + os.pathsep + os.environ.get("PATH", os.defpath)
+os.environ.update(spec.get("environment", {}))
 state = {"id": spec["id"], "phase": "running", "startedAt": time.time(), "step": 0}
 
 

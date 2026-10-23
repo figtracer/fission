@@ -40,6 +40,10 @@ selection. For GPU work, use `run --gpu TYPE[:COUNT]` without a VM region. Use
 `--provider modal-tempo` for a CPU sandbox. Sandbox commands, polls and transfers
 share the task budget; they do not provide SSH or guaranteed CPU/RAM/disk sizes.
 Use `fission help code` for source-file jobs without a VM where suitable.
+For browser work, add `--browser`; preparation and work receive
+`FISSION_BROWSER_URL`. Install a CDP client such as Playwright in preparation
+and connect to that browser. Its quote and cleanup share the task budget.
+See [browser sessions](https://github.com/figtracer/fission/blob/main/docs/browser.md).
 
 TOTAL includes provisioning, preparation, execution and cleanup. Preparation is
 configurable; measured timings from another task are not guarantees. Large direct
@@ -55,6 +59,9 @@ For work that must continue while the laptop sleeps, use a Linux controller host
 Read `fission help controller` and the [controller guide](https://github.com/figtracer/fission/blob/main/docs/controller.md).
 Run the same rental and workflow commands there over SSH, with inputs on that
 host. Keep its Fission state in place; copying live state is not migration.
+For compute deadline cleanup alone, `--watchdog HTTPS_ORIGIN` registers an
+existing Cloudflare watchdog. It cannot buy, extend, run jobs or collect results.
+Its deadline is fixed. Use the controller guide for deployment and credentials.
 
 ## Observe and finish
 

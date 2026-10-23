@@ -1,0 +1,8 @@
+{
+  "name": "fission-watchdog",
+  "main": "watchdog.mjs",
+  "compatibility_date": "2026-10-23",
+  "durable_objects": { "bindings": [{ "name": "RENTALS", "class_name": "Rental" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Rental"] }],
+  "observability": { "enabled": false }
+}

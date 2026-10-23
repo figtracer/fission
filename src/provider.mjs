@@ -132,6 +132,7 @@ export function runProcess(command, args, options = {}) {
 }
 
 function requestURL(provider, operation) {
+  if (operation === "browser-create") return "https://mpp.browserbase.com/browser/session/create";
   if (provider === "compute-mpp" && operation === "create") return "https://compute.x402layer.cc/compute/provision";
   if (provider === "modal-tempo" && ["create", "exec", "status", "terminate"].includes(operation)) return endpoint + operation;
   if (provider === "judge0" && operation === "execute-code") return "https://judge0.mpp.paywithlocus.com/judge0/execute-code";
@@ -169,10 +170,11 @@ export async function request(state, operation, body, maximum, id = randomUUID()
   state.provider = providerId(state.provider);
   if ((options.inputFd !== undefined || options.outputFd !== undefined) && (state.provider !== "compute-mpp" || operation !== "exec"))
     throw new Error("File streams require the VM SSH transport.");
-  if (state.provider === "compute-mpp" && !["create", "extend"].includes(operation))
+  if (state.provider === "compute-mpp" && !["create", "extend", "browser-create"].includes(operation))
     return (await import("./compute.mjs")).computeRequest(state, operation, body, id, options);
+  const service = operation === "browser-create" ? "browserbase" : state.provider;
   const { url, headers = [] } = operation === "extend"
-    ? await (await import("./compute.mjs")).extensionEndpoint(state) : { url: requestURL(state.provider, operation) };
+    ? await (await import("./compute.mjs")).extensionEndpoint(state) : { url: requestURL(service, operation) };
   const dir = join(directory(state.name), "requests");
   const intent = join(dir, `${id}.json`);
   const responsePath = join(dir, `${id}.response.json`);
@@ -206,12 +208,12 @@ export async function request(state, operation, body, maximum, id = randomUUID()
     const error = { code: result.code, stderr: result.stderr, stdout: result.stdout };
     await writeJSON(join(dir, `${id}.error.json`), error);
     if (rejectedCreate(state, operation, result, responseText, metaText)) await finalizeRejectedCreate(state, id, error);
-    if (!result.interruption) await recordProviderFailure(state.provider);
+    if (!result.interruption) await recordProviderFailure(service);
     const recovery = state.provider === "compute-mpp" && operation === "create" ? provisioningRecovery(response) : "";
     throw new Error(`Provider outcome is unresolved for ${operation} (${id}).${recovery} Saved response: ${responsePath}. Do not repeat the payment.`);
   }
   if (response.error || response.detail) {
-    await recordProviderFailure(state.provider);
+    await recordProviderFailure(service);
     throw new Error(`Provider rejected ${operation}; inspect ${responsePath}.`);
   }
   if (state.provider === "compute-mpp" && operation === "create") {

@@ -15,6 +15,7 @@ import { report } from "./reports.mjs";
 import { check } from "./readiness.mjs";
 import { fingerprint } from "./experiments.mjs";
 import { buildCache, stageCacheInput } from "./cache.mjs";
+import { browserClosed, browserStatus, closeBrowser } from "./browser.mjs";
 
 // The plan owns authorization; workspace state owns coordination; jobs own
 // execution. This supervisor cannot purchase. Recorded mutations are observed,
@@ -100,7 +101,7 @@ async function planTask(name, options, command, experiment) {
   const preview = { name, plan: plan.id, paymentSubmitted: false, ...(task.kind ? { kind: task.kind } : {}), harness: task.harness, mode: task.mode,
     ...(task.chain ? { chain: task.chain } : {}),
     provider: plan.provider, machine: plan.machine?.id || null, gpu: plan.body.gpu, resources: plan.capabilities, region: plan.body.region, providerWarning: plan.providerWarning,
-    quote: plan.creationQuote, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
+    quote: amount(units(plan.creationQuote) + (task.browser ? units(task.browser.quote) : 0n)), machineQuote: plan.creationQuote, browser: task.browser || null, watchdog: task.watchdog || null, allocation: plan.totalCap, currency: "USDC.e", timing: task.timing,
     lease: plan.lease || (sandbox ? { timeoutSeconds: plan.body.timeout } : { prepaidHours: plan.body.prepaid_hours }), context: task.context,
     setup: {
       recipe: { name: definition.name, sha256: definition.digest, prepareCommands: definition.prepare.length,
@@ -207,11 +208,14 @@ async function createFromFile(name, options) {
 export function nextTaskStep(state, jobs, now = Date.now()) {
   const task = state.task;
   if (!task) return "legacy";
+  if ((terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) && !browserClosed(task.browser)) return "browser-cleanup";
   if (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) return task.kind === "rental" ? task.completedAt ? "done" : "finalize" : task.report ? "done" : "report";
   if (!state.remoteId) return "reconcile";
   if (state.phase === "termination_unknown") return "confirm";
   const cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt || state.deadlineEstimate)) - task.timing.cleanupSeconds * 1000;
   if (task.outcome || task.stopRequestedAt || now >= cutoff) return "finish";
+  if (task.browser && task.browser.phase !== "ready") return "finish";
+  if (task.watchdog && task.watchdog.phase !== "armed") return "finish";
   if (state.phase === "prepare_failed") return "finish";
   const prepDeadline = Date.parse(state.requestedAt) + (task.timing.provisioningSeconds + task.timing.preparationSeconds) * 1000;
   if (!(task.kind === "rental" && task.readyAt) && !jobs.some((job) => job.id === "work") && now >= prepDeadline) return "finish";
@@ -248,14 +252,14 @@ export async function taskStatus(name, expectedExperiment) {
       usableUntil: new Date(usableUntil).toISOString(),
       closeReason: task.closeReason || null, accessError: task.accessError || null } : {}),
     supervisor: { pid: owner?.pid || null, alive: Boolean(owner && await ownerAlive(owner)), lastObservedAt: task.observedAt || null },
-    extensions: task.extensions || [],
+    extensions: task.extensions || [], browser: browserStatus(task.browser), watchdog: task.watchdog || null,
     deadline: new Date(task.deadline).toISOString(), providerExpiresAt: state.providerExpiresAt || null,
     accessObservations: state.accessObservations || [], initialization: state.initialization || null,
     provider: state.provider, gpu: state.guestGpu || null,
     resources: { selected: state.capabilities || null, providerObserved: state.observedResources || null, guestObserved: state.guestResources || null },
     timing: task.timing, jobs: jobs.map((job) => ({ id: job.id, phase: job.phase, step: job.observation?.step, startedAt: job.observation?.startedAt, finishedAt: job.observation?.finishedAt })),
     cost: record?.spending || { allocation: state.totalCap, creationQuote: state.creationQuote, verifiedOutflow: null, incomplete: true },
-    cleanup: { phase: state.phase, confirmed: terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase), observedAt: state.closedAt || null },
+    cleanup: { phase: state.phase, confirmed: (terminal(state) || ["not_submitted", "not_purchased"].includes(state.phase)) && browserClosed(task.browser), observedAt: state.closedAt || null },
     report: task.report?.report || null, summary: task.report?.summary || null, evidence: task.exports || [], cache: task.cache || null, experiment: task.experiment || null, lastError: task.lastError || null };
 }
 
@@ -316,6 +320,7 @@ export async function extendRental(name, options) {
     if (state.provider !== "compute-mpp" || task?.kind !== "rental" || !task.readyAt || task.stopRequestedAt || task.outcome ||
         state.phase !== "ready" || state.resizePending)
       throw new Error("Extend requires a ready SSH rental that has not started cleanup.");
+    if (task.watchdog) throw new Error("A watchdog deadline is fixed. This rental cannot be extended.");
     let cutoff = Math.min(task.deadline, Date.parse(state.providerExpiresAt)) - task.timing.cleanupSeconds * 1000;
     if (!Number.isFinite(cutoff) || Date.now() >= cutoff) throw new Error("Rental cleanup cutoff passed; extension cannot reopen it.");
     const pending = task.extensions?.find((item) => item.phase !== "applied");
@@ -482,7 +487,8 @@ async function finish(name, jobs) {
       await update(name, (task) => { task.cache.dependencies.save = { phase: "unresolved", reason: "Owner interrupted during cache save; not replayed" }; });
     }
   }
-  await close(name, { "discard-output": true });
+  try { await close(name, { "discard-output": true }); }
+  finally { await locked(name, async () => closeBrowser(await load(name))); }
 }
 
 export async function supervise(name) {
@@ -508,6 +514,14 @@ export async function supervise(name) {
               const result = await report(name, null, { output: state.task.output });
               await update(name, (task) => { task.report = result; });
             }
+            return;
+          }
+        } else if (step === "browser-cleanup") {
+          await locked(name, async () => closeBrowser(await load(name)));
+          state = await load(name);
+          if (!browserClosed(state.task.browser)) {
+            const result = await report(name, null, { output: state.task.output });
+            await update(name, (task) => { task.report = result; });
             return;
           }
         } else if (step === "confirm") {

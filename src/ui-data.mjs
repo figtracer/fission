@@ -56,7 +56,7 @@ async function main() {
       transactions.reduce((sum, item) => sum + units(item.paid), 0n);
     const capacity = state.observedResources || (state.lease ? state.lease.starterCapabilities : state.capabilities);
     const finished = ["terminated", "expired", "not_submitted", "not_purchased"].includes(state.phase);
-    const unresolved = state.phase.endsWith("_unknown");
+    const unresolved = state.phase.endsWith("_unknown") || Boolean(task?.browser && !task.browser.cleanupConfirmed && finished);
     return {
       name: state.name,
       phase: task?.outcome || task?.phase || (!finished && state.resizePending ? "resizing" : state.phase), provider: state.provider, providerWarning: Boolean(providerWarning(state.provider)), finished,

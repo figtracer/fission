@@ -284,11 +284,12 @@ export async function createPlan(name, options, task) {
       throw new Error("--gpu selects a Modal sandbox; use it with --provider modal-tempo and without --machine, --region or --cheapest.");
   }
   // A GPU sandbox pays for one nvidia-smi check before its bootstrap launch.
-  const headroom = task && options.provider === "modal-tempo"
+  if (task?.browser) task.browser.quote = (await quote("browser-create", task.browser.body, "browserbase")).amount;
+  const headroom = (task && options.provider === "modal-tempo"
     // One observation per 15s plus bootstrap/work, cancellation and collection.
     // Transfers remain bounded by the allocation; teardown has its own reserve.
     ? BigInt(Math.ceil(duration(options.duration) / 15) + managedLifecycleCalls) * 100n
-    : options.gpu === undefined ? minimumHeadroom : minimumHeadroom + 100n;
+    : options.gpu === undefined ? minimumHeadroom : minimumHeadroom + 100n) + (task?.browser ? money(task.browser.quote) : 0n);
   if (options.budget !== undefined) {
     if (options["max-spend"] !== undefined || options["total-spend"] !== undefined)
       throw new Error("Use --budget alone, or separate --max-spend and --total-spend caps.");
